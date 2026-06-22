@@ -251,6 +251,11 @@ claude-opus-4-8[1m] (Opus 4.8, 1M context)
 
 ## Change Log
 
+- 2026-06-22 — **Python retargeted to 3.14** (operator decision, supersedes the
+  story's original 3.12/`>=3.10`): `.python-version` → `3.14`,
+  `requires-python` → `>=3.14`, ruff `target-version` → `py314`; re-locked +
+  re-synced on CPython 3.14.5 (`exceptiongroup`/`tomli` backports dropped). Full
+  gate re-verified green (14 tests, ruff check + format, startup smoke).
 - 2026-06-22 — Implemented walking-skeleton MCP server: uv scaffold + deps +
   entry point, `config`/`middleware`/`server_factory`/`server`/`cli`/`util`
   modules, `core`/`git` seam anchors, full test suite (5 files, 14 tests), and
