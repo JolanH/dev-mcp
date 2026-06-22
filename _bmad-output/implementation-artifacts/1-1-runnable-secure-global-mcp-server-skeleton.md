@@ -1,6 +1,10 @@
+---
+baseline_commit: 662a9bb155dbc877fecfea57413e8b98a7c4db25
+---
+
 # Story 1.1: Runnable, secure global MCP server skeleton
 
-Status: ready-for-dev
+Status: review
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -42,39 +46,39 @@ so that the transport, mount, and Origin-security foundation is proven end-to-en
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1 — uv scaffold + dependency pins + entry point (AC: 1, 5)**
-  - [ ] `uv init --package dev-helper-mcp` producing `src/dev_helper_mcp/` layout, `pyproject.toml`, `uv.lock`, `uv_build` backend
-  - [ ] `uv add "mcp>=1.28,<2"` and `uv add "aiosqlite"` (Starlette/uvicorn arrive transitively via `mcp`) — **do not** add Starlette/uvicorn/FastMCP-standalone as direct deps
-  - [ ] `uv add --dev ruff pytest` (dev group); add `httpx` to the test/dev deps for the in-process `ASGITransport` harness
-  - [ ] Pin `.python-version` to `3.12`; set `requires-python = ">=3.10"` in `pyproject.toml`
-  - [ ] `.gitignore` includes the venv, `__pycache__`, build artifacts, and the worktree sibling pattern `*.worktrees/` (runtime state lives in XDG, not the repo — no `.dev-helper-mcp/` in-repo)
-  - [ ] Declare the console entry point `dev-helper-mcp = "dev_helper_mcp.cli:main"` and `python -m dev_helper_mcp` via `__main__.py`
-  - [ ] Add `[tool.ruff]` config (line length, target-version py312) and a `[tool.pytest.ini_options]` block registering the `slow` marker
-- [ ] **Task 2 — config + constants module (AC: 1, 3)**
-  - [ ] `config.py`: `DEFAULT_PORT = 8765`, `PORT_RANGE = range(8765, 8776)` (8765→8775 inclusive), allowed-origin **host** set `{127.0.0.1, localhost}`, app name string — single source, no magic numbers elsewhere
-- [ ] **Task 3 — Origin-validation middleware (AC: 3) — our own, NOT FastMCP's**
-  - [ ] `middleware.py`: `OriginValidationMiddleware` (pure Starlette `BaseHTTPMiddleware` or ASGI middleware). Rule: `Origin` **present and not** in `{http://127.0.0.1:<port>, http://localhost:<port>}` → `403`; `Origin` **absent** → allow; allowlisted → allow
-  - [ ] The bound port MUST be passed into the middleware/app factory so the allowlist is exact (see Dev Note "Port↔Origin chicken-and-egg"); never hardcode 8765 in the allowlist
-- [ ] **Task 4 — SDK adapter: server_factory (AC: 2, 3, 4)**
-  - [ ] `server_factory.py` (the ONLY module besides `server`/`middleware`/`cli` that imports `mcp`/`starlette` in this story): build `FastMCP("dev-helper-mcp")`, register one no-op `ping` tool returning a trivial `{ok: true, ...}`-shaped value
-  - [ ] Set `mcp.settings.streamable_http_path = "/"`; build `mcp_app = mcp.streamable_http_app()`
-  - [ ] Build the app-owned Starlette app: `Mount("/mcp", app=mcp_app)` + the Origin middleware as the **outermost** parent middleware; lifespan MUST wrap `async with mcp_app.lifespan(mcp_app):` (load-bearing — otherwise `/mcp` fails "Task group is not initialized")
-- [ ] **Task 5 — server lifecycle + CLI (AC: 1)**
-  - [ ] `server.py`: scan `PORT_RANGE` for the first free port on `127.0.0.1`, build the app with that port, run uvicorn bound to `127.0.0.1` (never `0.0.0.0`), print the dashboard URL (`http://127.0.0.1:<port>/`) on startup
-  - [ ] `cli.py` `main()`: minimal arg parsing (accept `--port N` optional override is acceptable but full strict-override/`stop` semantics are Story 3.2 — keep minimal here), dispatch to `server`. **No `--repo` flag** (the server is global)
-  - [ ] `__main__.py`: `from .cli import main; main()`
-- [ ] **Task 6 — core-layer seam anchor (AC: 4)**
-  - [ ] Create empty core-layer packages `core/__init__.py`, `git/__init__.py` and `util.py` with `now_iso()` (UTC ISO-8601 `Z`, second precision) — anchors the adapter seam so the seam test has real modules to scan and `now_iso()` exists for later stories. Do **not** add `mcp`/`starlette` imports here
-- [ ] **Task 7 — tests (`tests/` mirrors `src/`) (AC: 2, 3, 4)**
-  - [ ] `conftest.py`: in-process `httpx.ASGITransport` client fixture against the Starlette app
-  - [ ] `test_server_factory.py`: mount resolves, lifespan starts the session manager, `/mcp` handshake completes with **no 307**, `ping` tool round-trips
-  - [ ] `test_middleware_origin.py`: Origin matrix on `/mcp` AND a non-`/mcp` route — non-allowlisted Origin → 403, absent Origin → allow, allowlisted Origin → allow
-  - [ ] `test_smoke_uvicorn.py`: spin a real ephemeral uvicorn, assert the bound socket is `127.0.0.1` not `0.0.0.0`; mark `@pytest.mark.slow`
-  - [ ] `test_adapter_seam.py`: walk `core/`, `git/`, and (when they exist) `store`/`projection`/`cache` modules; assert none import `mcp` or `starlette`
-- [ ] **Task 8 — install + verify the enforced quality gate (AC: 5)**
-  - [ ] Add a tracked hook at `.githooks/pre-commit` running `ruff check`, `ruff format --check`, and `pytest` (fast suite; the `slow` smoke test may be excluded by default), exiting non-zero on any failure
-  - [ ] Wire it via `git config core.hooksPath .githooks` (robust across the `agent/<task>` worktrees this tool creates, which share one `.git`) and document the one-time install in `README.md`
-  - [ ] Verify: a deliberately failing lint/test blocks `git commit`; a clean tree commits; all Task 7 tests pass under the gate
+- [x] **Task 1 — uv scaffold + dependency pins + entry point (AC: 1, 5)**
+  - [x] `uv init --package dev-helper-mcp` producing `src/dev_helper_mcp/` layout, `pyproject.toml`, `uv.lock`, `uv_build` backend
+  - [x] `uv add "mcp>=1.28,<2"` and `uv add "aiosqlite"` (Starlette/uvicorn arrive transitively via `mcp`) — **do not** add Starlette/uvicorn/FastMCP-standalone as direct deps
+  - [x] `uv add --dev ruff pytest` (dev group); add `httpx` to the test/dev deps for the in-process `ASGITransport` harness
+  - [x] Pin `.python-version` to `3.12`; set `requires-python = ">=3.10"` in `pyproject.toml`
+  - [x] `.gitignore` includes the venv, `__pycache__`, build artifacts, and the worktree sibling pattern `*.worktrees/` (runtime state lives in XDG, not the repo — no `.dev-helper-mcp/` in-repo)
+  - [x] Declare the console entry point `dev-helper-mcp = "dev_helper_mcp.cli:main"` and `python -m dev_helper_mcp` via `__main__.py`
+  - [x] Add `[tool.ruff]` config (line length, target-version py312) and a `[tool.pytest.ini_options]` block registering the `slow` marker
+- [x] **Task 2 — config + constants module (AC: 1, 3)**
+  - [x] `config.py`: `DEFAULT_PORT = 8765`, `PORT_RANGE = range(8765, 8776)` (8765→8775 inclusive), allowed-origin **host** set `{127.0.0.1, localhost}`, app name string — single source, no magic numbers elsewhere
+- [x] **Task 3 — Origin-validation middleware (AC: 3) — our own, NOT FastMCP's**
+  - [x] `middleware.py`: `OriginValidationMiddleware` (pure Starlette `BaseHTTPMiddleware` or ASGI middleware). Rule: `Origin` **present and not** in `{http://127.0.0.1:<port>, http://localhost:<port>}` → `403`; `Origin` **absent** → allow; allowlisted → allow
+  - [x] The bound port MUST be passed into the middleware/app factory so the allowlist is exact (see Dev Note "Port↔Origin chicken-and-egg"); never hardcode 8765 in the allowlist
+- [x] **Task 4 — SDK adapter: server_factory (AC: 2, 3, 4)**
+  - [x] `server_factory.py` (the ONLY module besides `server`/`middleware`/`cli` that imports `mcp`/`starlette` in this story): build `FastMCP("dev-helper-mcp")`, register one no-op `ping` tool returning a trivial `{ok: true, ...}`-shaped value
+  - [x] Set `mcp.settings.streamable_http_path = "/"`; build `mcp_app = mcp.streamable_http_app()`
+  - [x] Build the app-owned Starlette app: `Mount("/mcp", app=mcp_app)` + the Origin middleware as the **outermost** parent middleware; lifespan MUST wrap `async with mcp_app.lifespan(mcp_app):` (load-bearing — otherwise `/mcp` fails "Task group is not initialized")
+- [x] **Task 5 — server lifecycle + CLI (AC: 1)**
+  - [x] `server.py`: scan `PORT_RANGE` for the first free port on `127.0.0.1`, build the app with that port, run uvicorn bound to `127.0.0.1` (never `0.0.0.0`), print the dashboard URL (`http://127.0.0.1:<port>/`) on startup
+  - [x] `cli.py` `main()`: minimal arg parsing (accept `--port N` optional override is acceptable but full strict-override/`stop` semantics are Story 3.2 — keep minimal here), dispatch to `server`. **No `--repo` flag** (the server is global)
+  - [x] `__main__.py`: `from .cli import main; main()`
+- [x] **Task 6 — core-layer seam anchor (AC: 4)**
+  - [x] Create empty core-layer packages `core/__init__.py`, `git/__init__.py` and `util.py` with `now_iso()` (UTC ISO-8601 `Z`, second precision) — anchors the adapter seam so the seam test has real modules to scan and `now_iso()` exists for later stories. Do **not** add `mcp`/`starlette` imports here
+- [x] **Task 7 — tests (`tests/` mirrors `src/`) (AC: 2, 3, 4)**
+  - [x] `conftest.py`: in-process `httpx.ASGITransport` client fixture against the Starlette app
+  - [x] `test_server_factory.py`: mount resolves, lifespan starts the session manager, `/mcp` handshake completes with **no 307**, `ping` tool round-trips
+  - [x] `test_middleware_origin.py`: Origin matrix on `/mcp` AND a non-`/mcp` route — non-allowlisted Origin → 403, absent Origin → allow, allowlisted Origin → allow
+  - [x] `test_smoke_uvicorn.py`: spin a real ephemeral uvicorn, assert the bound socket is `127.0.0.1` not `0.0.0.0`; mark `@pytest.mark.slow`
+  - [x] `test_adapter_seam.py`: walk `core/`, `git/`, and (when they exist) `store`/`projection`/`cache` modules; assert none import `mcp` or `starlette`
+- [x] **Task 8 — install + verify the enforced quality gate (AC: 5)**
+  - [x] Add a tracked hook at `.githooks/pre-commit` running `ruff check`, `ruff format --check`, and `pytest` (fast suite; the `slow` smoke test may be excluded by default), exiting non-zero on any failure
+  - [x] Wire it via `git config core.hooksPath .githooks` (robust across the `agent/<task>` worktrees this tool creates, which share one `.git`) and document the one-time install in `README.md`
+  - [x] Verify: a deliberately failing lint/test blocks `git commit`; a clean tree commits; all Task 7 tests pass under the gate
 
 ## Dev Notes
 
@@ -172,12 +176,85 @@ First story of the project — no previous story to learn from. The repo's git h
 
 ### Agent Model Used
 
-{{agent_model_name_version}}
+claude-opus-4-8[1m] (Opus 4.8, 1M context)
 
 ### Debug Log References
+
+- **307-redirect resolution (AC 2).** The story's literal pseudo-code
+  (`streamable_http_path="/"` + `Mount("/mcp")`) 307-redirects a bare `/mcp` to
+  `/mcp/` on the resolved Starlette 1.3.1 (the mount strips `/mcp` to `""` while
+  the inner route is `/`). Because the MCP SDK client does not follow redirects
+  on POST, this fails AC 2's "no 307" requirement. Verified empirically and
+  switched to the equivalent wiring that serves a bare `/mcp` with a clean 200:
+  `streamable_http_path="/mcp"` (FastMCP default) + `Mount("/", app=mcp_app)`.
+  All three invariants still hold (no 307, `/mcp` reachable, lifespan wrapped,
+  Origin middleware outermost, 127.0.0.1 bind). Documented in
+  `server_factory.py` module docstring.
+- **Lifespan under test harness.** `httpx.ASGITransport` does not auto-run the
+  app lifespan, so in-process tests drive it explicitly via
+  `async with app.router.lifespan_context(app)`; otherwise `/mcp` fails with
+  "Task group is not initialized" (Invariant 8).
+- **Host header in-process.** The in-process base URL uses `127.0.0.1:<port>`
+  (not httpx's default `testserver`) so the synthesised Host header passes
+  FastMCP's own transport host validation (otherwise 421 Misdirected Request).
+- **No pytest-asyncio.** To keep dev deps to the story's set (ruff/pytest/httpx),
+  async tests are driven with `asyncio.run()` rather than adding a plugin.
+- **ping envelope shape.** A plain `dict` return is serialised as JSON text
+  content (FastMCP leaves `structuredContent` `None` without an output model);
+  the round-trip test parses `content[0].text` to assert the `{ok, data, error}`
+  envelope.
 
 ### Completion Notes List
 
 - Ultimate context engine analysis completed — comprehensive developer guide created.
+- **AC 1** — `uv init --package` scaffold (`src/` layout); `uv run dev-helper-mcp`
+  scans 8765→8775, binds `127.0.0.1` on the first free port, and prints the
+  dashboard URL on startup. ✅ verified by real-run smoke + `test_smoke_uvicorn`.
+- **AC 2** — `/mcp` MCP handshake completes with **no 307**; the seed `ping`
+  tool round-trips the `{ok, data, error}` envelope. ✅ `test_server_factory`.
+- **AC 3** — outermost `OriginValidationMiddleware`: present+non-allowlisted →
+  `403`, absent → allow, allowlisted → allow, on `/mcp` AND a non-`/mcp` route.
+  ✅ `test_middleware_origin`.
+- **AC 4** — bind is `127.0.0.1`, never `0.0.0.0` (`test_smoke_uvicorn`); core
+  layer (`core/`, `git/`, future `store`/`projection`/`cache`) imports no
+  `mcp`/`starlette` (`test_adapter_seam`). ✅
+- **AC 5** — enforced pre-commit gate (`ruff check` + `ruff format --check` +
+  fast `pytest`) wired via `core.hooksPath .githooks`. Verified: a deliberate
+  lint error blocks (exit 1); a clean tree passes (exit 0). ✅
+- Full suite: **14 passed** (incl. the `slow` real-port smoke). Ruff scoped to
+  `src`/`tests` (vendored BMad/skill scripts excluded). Out-of-scope items (real
+  git/DB/tools/dashboard/lockfile) deliberately not pulled forward.
 
 ### File List
+
+- `pyproject.toml` (modified) — deps, entry point, ruff/pytest config
+- `uv.lock` (added)
+- `.python-version` (added) — 3.12
+- `.gitignore` (modified) — venv, caches, build, `*.worktrees/`
+- `README.md` (added) — run + one-time hook install instructions
+- `.githooks/pre-commit` (added) — enforced quality gate
+- `src/dev_helper_mcp/__init__.py` (added)
+- `src/dev_helper_mcp/__main__.py` (added)
+- `src/dev_helper_mcp/cli.py` (added)
+- `src/dev_helper_mcp/config.py` (added)
+- `src/dev_helper_mcp/middleware.py` (added)
+- `src/dev_helper_mcp/server_factory.py` (added)
+- `src/dev_helper_mcp/server.py` (added)
+- `src/dev_helper_mcp/util.py` (added)
+- `src/dev_helper_mcp/core/__init__.py` (added) — seam anchor
+- `src/dev_helper_mcp/git/__init__.py` (added) — seam anchor
+- `tests/conftest.py` (added)
+- `tests/test_server_factory.py` (added)
+- `tests/test_middleware_origin.py` (added)
+- `tests/test_smoke_uvicorn.py` (added)
+- `tests/test_adapter_seam.py` (added)
+
+## Change Log
+
+- 2026-06-22 — Implemented walking-skeleton MCP server: uv scaffold + deps +
+  entry point, `config`/`middleware`/`server_factory`/`server`/`cli`/`util`
+  modules, `core`/`git` seam anchors, full test suite (5 files, 14 tests), and
+  the enforced pre-commit quality gate. Resolved the `/mcp` 307 via
+  `streamable_http_path="/mcp"` + `Mount("/")` (equivalent intent to the story's
+  pseudo-code; documented in `server_factory`). Status: ready-for-dev →
+  in-progress → review.
