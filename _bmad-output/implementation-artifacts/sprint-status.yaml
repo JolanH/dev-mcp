@@ -45,7 +45,7 @@ development_status:
   # Epic 1: Agent multi-repo task self-service over MCP
   epic-1: in-progress
   1-1-runnable-secure-global-mcp-server-skeleton: done
-  1-2-async-git-execution-and-persistence-substrate: backlog
+  1-2-async-git-execution-and-persistence-substrate: done
   1-3-create-a-multi-repo-task-happy-path: backlog
   1-4-create-task-cross-repo-rollback-error-safe: backlog
   1-5-list-and-remove-worktrees: backlog

@@ -9,6 +9,9 @@ The single real-port uvicorn smoke test lives in ``test_smoke_uvicorn.py`` and
 is ``slow``-marked.
 """
 
+import os
+import subprocess
+
 import httpx
 import pytest
 
@@ -55,3 +58,31 @@ def asgi_client_factory(app):
         )
 
     return factory
+
+
+@pytest.fixture
+def tmp_git_repo(tmp_path):
+    """A real, initialized git repo with one commit (reused by Stories 1.2–1.5).
+
+    Uses ``subprocess`` directly — the "single run_git() only" rule governs
+    ``src/`` runtime code, not test scaffolding.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+
+    def git(*args: str) -> None:
+        subprocess.run(
+            ["git", "-C", str(repo), *args],
+            check=True,
+            capture_output=True,
+            env=env,
+        )
+
+    git("init", "-q", "-b", "main")
+    git("config", "user.email", "test@example.com")
+    git("config", "user.name", "Test")
+    (repo / "README.md").write_text("hi\n")
+    git("add", "-A")
+    git("commit", "-q", "-m", "init")
+    return repo
