@@ -89,3 +89,23 @@ _This file contains critical rules and patterns that AI agents must follow when 
 - Persisting derived state, or shelling out to git on the `/state` poll path.
 - Hardcoding `8765` in the Origin allowlist; binding `0.0.0.0`.
 - A destructive git op (`worktree remove --force`, `branch -D`) on the read/refresh path.
+
+---
+
+## Usage Guidelines
+
+**For AI Agents:**
+
+- Read this file before implementing any code in this project.
+- Follow ALL rules exactly as documented; when in doubt, prefer the more restrictive option.
+- The **architecture doc** (`_bmad-output/planning-artifacts/architecture.md`) is the binding contract for *what* to build; this file captures the unobvious *how* + the gotchas verified in implementation. Where this file's "reality differs" notes (e.g. the 307 wiring) contradict the architecture's pseudo-code, **this file wins** — it reflects working code.
+- Propose pattern changes in `architecture.md` first, then propagate here — don't invent conventions ad-hoc in a story.
+
+**For Humans:**
+
+- Keep this file lean and focused on what agents get wrong without a reminder; remove rules that become obvious.
+- Update when the technology stack or a binding pattern changes (e.g. the `mcp` v2 migration).
+- Review periodically for outdated rules.
+
+Last Updated: 2026-06-22
+

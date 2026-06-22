@@ -8,7 +8,7 @@ scaffold + the enforced quality gate. No real git, DB, tools, or dashboard yet.
 
 ## Requirements
 
-- [uv](https://docs.astral.sh/uv/) (manages the Python 3.12 toolchain and venv)
+- [uv](https://docs.astral.sh/uv/) (manages the Python 3.14 toolchain and venv)
 
 ## Run
 

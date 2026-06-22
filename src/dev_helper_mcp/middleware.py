@@ -37,11 +37,13 @@ class OriginValidationMiddleware(BaseHTTPMiddleware):
 
     def __init__(self, app: ASGIApp, port: int) -> None:
         super().__init__(app)
-        self._allowed = allowed_origins(port)
+        # Normalize to lower-case: per RFC 6454 the scheme and host of an Origin
+        # are case-insensitive, so the allowlist is compared case-folded.
+        self._allowed = frozenset(o.lower() for o in allowed_origins(port))
 
     async def dispatch(self, request: Request, call_next):  # type: ignore[override]
         origin = request.headers.get("origin")
-        if origin is not None and origin not in self._allowed:
+        if origin is not None and origin.lower() not in self._allowed:
             logger.warning("Rejected request with disallowed Origin: %s", origin)
             return PlainTextResponse("Forbidden: invalid Origin", status_code=403)
         return await call_next(request)

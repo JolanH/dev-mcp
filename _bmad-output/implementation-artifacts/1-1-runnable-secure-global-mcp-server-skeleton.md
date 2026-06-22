@@ -4,7 +4,7 @@ baseline_commit: 662a9bb155dbc877fecfea57413e8b98a7c4db25
 
 # Story 1.1: Runnable, secure global MCP server skeleton
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -79,6 +79,18 @@ so that the transport, mount, and Origin-security foundation is proven end-to-en
   - [x] Add a tracked hook at `.githooks/pre-commit` running `ruff check`, `ruff format --check`, and `pytest` (fast suite; the `slow` smoke test may be excluded by default), exiting non-zero on any failure
   - [x] Wire it via `git config core.hooksPath .githooks` (robust across the `agent/<task>` worktrees this tool creates, which share one `.git`) and document the one-time install in `README.md`
   - [x] Verify: a deliberately failing lint/test blocks `git commit`; a clean tree commits; all Task 7 tests pass under the gate
+
+### Review Findings
+
+_Code review 2026-06-22 (adversarial: Blind Hunter + Edge Case Hunter + Acceptance Auditor). All 5 ACs satisfied; the two apparent spec deviations (Python 3.14, inverted `streamable_http_path="/mcp"` + `Mount("/")` 307-fix) are both mandated by `project-context.md` and are correct._
+
+- [x] [Review][Patch] `--port` override: if the forced port is unavailable or invalid (busy / `0` / negative / >65535), log a warning and fall back to scanning `PORT_RANGE` instead of crashing with a raw traceback (resolved decision: fall-back-to-scanning) — FIXED via `_port_free()` helper [src/dev_helper_mcp/server.py:18-58]
+- [x] [Review][Patch] README states "Python 3.12 toolchain" but the project requires 3.14 — FIXED [README.md:11]
+- [x] [Review][Patch] Origin matching is case-sensitive — an uppercase host Origin (e.g. `http://LOCALHOST:<port>`) is falsely 403'd; RFC 6454 scheme/host are case-insensitive — FIXED (case-folded allowlist + compare) [src/dev_helper_mcp/middleware.py:38-44]
+- [x] [Review][Defer] TOCTOU race: `find_free_port` binds+closes a probe socket, then `uvicorn.run` re-binds by number — the port can be stolen in the gap, crashing with an unhandled `OSError`. Robust fix (hand the bound socket to uvicorn) is non-trivial and tied to single-instance protection. — deferred to Story 3.1 (single-instance/lockfile); low real-world impact for a localhost single-user tool [src/dev_helper_mcp/server.py:18-44]
+- [x] [Review][Defer] `Mount("/", app=mcp_app)` claims the entire URL space — any future dashboard/sibling route added to the parent Starlette app will be shadowed and unreachable. Mandated as the 307-fix for this story, but the dashboard wiring must revisit it. — deferred to Epic 2 (dashboard `/state` + board) [src/dev_helper_mcp/server_factory.py:75]
+
+_Dismissed as noise (6): `streamable_http_client` import "wrong name" (false positive — the SDK exports both `streamable_http_client` and `streamablehttp_client`; suite is green); `now_iso()` second-precision (by design — `project-context.md` mandates second precision); empty `Origin: ""` → 403 (negligible, fail-closed, no real client sends it); pre-commit `set -e` + missing `uv` cryptic exit (by design — `uv` is the required toolchain); conftest `asgi_client_factory` coupling smell (test-only, no failure); `.gitignore`/`uv.lock` absent from diff (verified present on disk — diff-scoping artifact)._
 
 ## Dev Notes
 
