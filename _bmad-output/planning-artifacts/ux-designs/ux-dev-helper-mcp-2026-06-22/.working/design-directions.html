@@ -1,0 +1,187 @@
+<title>dev-helper-mcp dashboard — visual directions</title>
+<style>
+  :root { color-scheme: dark; }
+  .page { max-width: 1100px; margin: 0 auto; padding: 32px 20px 80px;
+          font-family: ui-sans-serif, system-ui, sans-serif; color: #c9d1d9; background:#0a0c10; }
+  .page > header h1 { font-size: 22px; font-weight: 650; color:#e6edf3; margin:0 0 6px; letter-spacing:-0.01em;}
+  .page > header p { font-size: 14px; color:#8b949e; margin:0 0 4px; line-height:1.5; }
+  .dir-wrap { margin-top: 40px; border-top: 1px solid #21262d; padding-top: 22px; }
+  .dir-tag { display:inline-block; font-size:12px; font-weight:700; letter-spacing:.08em; text-transform:uppercase;
+             padding:3px 9px; border-radius:5px; margin-bottom:10px; }
+  .dir-wrap h2 { font-size:18px; margin:4px 0 4px; color:#e6edf3; }
+  .dir-desc { font-size:13.5px; color:#8b949e; margin:0 0 18px; line-height:1.55; max-width:780px; }
+  .frame { border-radius:10px; overflow:hidden; border:1px solid #21262d; }
+  @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:.35;} }
+  @keyframes barpulse { 0%,100%{opacity:1;} 50%{opacity:.45;} }
+
+  /* ============ DIRECTION A — TERMINAL ============ */
+  .dirA { background:#0b0f0d; padding:18px; font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace; }
+  .dirA .topbar { display:flex; justify-content:space-between; align-items:baseline; border-bottom:1px dashed #1f2a22; padding-bottom:10px; margin-bottom:14px;}
+  .dirA .brand { color:#3fb950; font-size:13px; letter-spacing:.04em;}
+  .dirA .brand b{ color:#7ee787;}
+  .dirA .fresh { color:#4d5d51; font-size:11px;}
+  .dirA .cols { display:grid; grid-template-columns:repeat(3,1fr); gap:12px;}
+  .dirA .col-h { font-size:12px; letter-spacing:.1em; padding:4px 0 8px; border-bottom:1px solid #18211b; margin-bottom:10px;}
+  .dirA .col-run .col-h{ color:#3fb950;} .dirA .col-blk .col-h{ color:#d29922;} .dirA .col-done .col-h{ color:#4d5d51;}
+  .dirA .card{ border:1px solid #1c2a20; background:#0d130f; padding:9px 10px; margin-bottom:10px; font-size:12px;}
+  .dirA .card.run{ border-left:2px solid #3fb950;} .dirA .card.blk{ border-left:2px solid #d29922;} .dirA .card.done{ border-left:2px solid #2c3a30; opacity:.55;}
+  .dirA .t{ color:#e6edf3; font-weight:600; display:flex; align-items:center; gap:7px;}
+  .dirA .dot{ width:7px;height:7px;border-radius:50%; display:inline-block;}
+  .dirA .run .dot{ background:#3fb950; animation:pulse 1.6s ease-in-out infinite;} .dirA .blk .dot{ background:#d29922;} .dirA .done .dot{ background:#4d5d51;}
+  .dirA .wt{ color:#7d8b80; margin-top:5px; padding-left:14px; line-height:1.5;}
+  .dirA .wt b{ color:#9db1a3;} .dirA .br{ color:#56d364;}
+  .dirA .note{ color:#d29922;}
+  .dirA .orphan{ margin-top:14px; border-top:1px dashed #1f2a22; padding-top:8px; font-size:11px; color:#4d5d51;}
+  .dirA .orphan b{ color:#6e7d72;}
+
+  /* ============ DIRECTION B — MODERN CONSOLE ============ */
+  .dirB { background:#0e1117; padding:22px;}
+  .dirB .summary{ display:flex; gap:10px; align-items:center; margin-bottom:18px;}
+  .dirB .pill{ display:inline-flex; align-items:center; gap:7px; font-size:13px; font-weight:600; padding:6px 13px; border-radius:999px; border:1px solid #21262d; background:#161b22;}
+  .dirB .pill .d{ width:8px;height:8px;border-radius:50%;}
+  .dirB .pill.run{ color:#39d0a8; border-color:#1f3f37;} .dirB .pill.run .d{ background:#39d0a8; animation:pulse 1.6s ease-in-out infinite;}
+  .dirB .pill.blk{ color:#e3a34a; border-color:#3d3320;} .dirB .pill.blk .d{ background:#e3a34a;}
+  .dirB .pill.done{ color:#7d8590;} .dirB .pill.done .d{ background:#7d8590;}
+  .dirB .fresh{ margin-left:auto; font-size:12px; color:#586069;}
+  .dirB .cols{ display:grid; grid-template-columns:repeat(3,1fr); gap:14px;}
+  .dirB .col-h{ font-size:12.5px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; color:#8b949e; margin-bottom:11px; display:flex; gap:7px; align-items:center;}
+  .dirB .col-run .col-h{ color:#39d0a8;} .dirB .col-blk .col-h{ color:#e3a34a;}
+  .dirB .card{ background:#161b22; border:1px solid #21262d; border-radius:10px; padding:13px 14px; margin-bottom:12px; box-shadow:0 1px 2px rgba(0,0,0,.3);}
+  .dirB .card.run{ box-shadow:0 0 0 1px #1f3f37, 0 1px 8px rgba(57,208,168,.07);}
+  .dirB .card.done{ opacity:.5;}
+  .dirB .t{ font-size:14px; font-weight:650; color:#e6edf3; display:flex; align-items:center; gap:8px; margin-bottom:8px;}
+  .dirB .t .d{ width:8px;height:8px;border-radius:50%;}
+  .dirB .run .t .d{ background:#39d0a8; animation:pulse 1.6s ease-in-out infinite;} .dirB .blk .t .d{ background:#e3a34a;} .dirB .done .t .d{ background:#7d8590;}
+  .dirB .wt{ font-size:12px; color:#8b949e; padding:5px 0 0 16px; line-height:1.6; font-family:ui-monospace,monospace;}
+  .dirB .wt .repo{ color:#c9d1d9;} .dirB .wt .br{ color:#39d0a8;}
+  .dirB .badge{ font-size:11px; color:#e3a34a; background:#2a2113; padding:2px 7px; border-radius:5px; margin-left:auto;}
+  .dirB .orphan{ margin-top:16px; border-top:1px solid #21262d; padding-top:12px;}
+  .dirB .orphan summary{ font-size:12px; color:#586069; cursor:pointer;}
+  .dirB .orphan .o{ font-size:12px; color:#6e7681; margin-top:8px; padding-left:14px; font-family:ui-monospace,monospace;}
+
+  /* ============ DIRECTION C — DENSE OPS ============ */
+  .dirC{ background:#0d1017; padding:16px; font-size:12px;}
+  .dirC .topbar{ display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;}
+  .dirC .brand{ font-size:12px; font-weight:700; color:#adbac7; letter-spacing:.02em;}
+  .dirC .counts{ font-size:11px; color:#636e7b; display:flex; gap:12px;}
+  .dirC .counts .r{ color:#57ab5a;} .dirC .counts .b{ color:#c69026;}
+  .dirC .cols{ display:grid; grid-template-columns:repeat(3,1fr); gap:8px;}
+  .dirC .col{ background:#11151d; border-radius:7px; padding:8px;}
+  .dirC .col-h{ font-size:10.5px; letter-spacing:.09em; text-transform:uppercase; color:#636e7b; padding:0 2px 8px; }
+  .dirC .col-run .col-h{ color:#57ab5a;} .dirC .col-blk .col-h{ color:#c69026;}
+  .dirC .card{ background:#171c26; border-radius:5px; padding:7px 9px 7px 11px; margin-bottom:7px; position:relative; overflow:hidden;}
+  .dirC .card::before{ content:""; position:absolute; left:0; top:0; bottom:0; width:3px;}
+  .dirC .card.run::before{ background:#57ab5a; animation:barpulse 1.7s ease-in-out infinite;}
+  .dirC .card.blk::before{ background:#c69026;} .dirC .card.done::before{ background:#373e47;}
+  .dirC .card.done{ opacity:.5;}
+  .dirC .t{ color:#e6edf3; font-weight:600; font-size:12.5px; display:flex; justify-content:space-between;}
+  .dirC .t .st{ font-size:10px; color:#636e7b; font-weight:500;}
+  .dirC .wt{ color:#768390; margin-top:4px; line-height:1.5; font-family:ui-monospace,monospace; font-size:11px;}
+  .dirC .wt .br{ color:#6cb6ff;}
+  .dirC .orphan{ grid-column:1/-1; margin-top:6px; font-size:10.5px; color:#545d68; padding-top:8px; border-top:1px solid #1b2129;}
+</style>
+
+<div class="page">
+  <header>
+    <h1>dev-helper-mcp dashboard — three visual directions</h1>
+    <p>Same structure for all three (kanban Running | Blocked | Done · dark · running carries a live pulse · done dimmed · blocked amber-distinct). They differ only in <b>aesthetic</b>. Pick one, or say "B's summary bar + A's monospace," etc.</p>
+    <p style="color:#586069;font-size:12.5px;">Sample data: 2 running tasks, 1 blocked, 1 done, across repos A/B/C — plus one orphaned annotation (branch gone) and a freshness stamp.</p>
+  </header>
+
+  <!-- DIRECTION A -->
+  <section class="dir-wrap">
+    <span class="dir-tag" style="background:#11271a;color:#3fb950;">Direction A</span>
+    <h2>Terminal</h2>
+    <p class="dir-desc">Monospace, phosphor-green, sharp edges, dashed rules. Reads like a TUI/CLI tool — maximum dev-native familiarity and density. The running dot blinks like a cursor.</p>
+    <div class="frame">
+      <div class="dirA">
+        <div class="topbar"><span class="brand">dev-helper-mcp <b>// 1 machine · 3 repos · 4 tasks</b></span><span class="fresh">updated 1s ago</span></div>
+        <div class="cols">
+          <div class="col col-run"><div class="col-h">[ RUNNING · 2 ]</div>
+            <div class="card run"><div class="t"><span class="dot"></span>api-refactor</div>
+              <div class="wt"><b>repoA</b> <span class="br">agent/api-refactor</span></div>
+              <div class="wt"><b>repoB</b> <span class="br">agent/api-refactor</span></div></div>
+            <div class="card run"><div class="t"><span class="dot"></span>ui-polling</div>
+              <div class="wt"><b>repoA</b> <span class="br">agent/ui-polling</span></div></div>
+          </div>
+          <div class="col col-blk"><div class="col-h">[ BLOCKED · 1 ]</div>
+            <div class="card blk"><div class="t"><span class="dot"></span>db-migration</div>
+              <div class="wt"><b>repoB</b> <span class="br">agent/db-migration</span></div>
+              <div class="wt note">⚠ waiting on review</div></div>
+          </div>
+          <div class="col col-done"><div class="col-h">[ DONE · 1 ]</div>
+            <div class="card done"><div class="t"><span class="dot"></span>auth-docs</div>
+              <div class="wt"><b>repoC</b> <span class="br">agent/auth-docs</span> ✓</div></div>
+          </div>
+        </div>
+        <div class="orphan">orphaned · <b>agent/old-spike</b> — branch gone from git, note preserved</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- DIRECTION B -->
+  <section class="dir-wrap">
+    <span class="dir-tag" style="background:#0f2b25;color:#39d0a8;">Direction B</span>
+    <h2>Modern console</h2>
+    <p class="dir-desc">System sans-serif, rounded cards with soft elevation, a teal accent, and a top summary bar of status counts. Calmer and more "product"; the running card gets a faint glow, the blocked task a labelled badge.</p>
+    <div class="frame">
+      <div class="dirB">
+        <div class="summary">
+          <span class="pill run"><span class="d"></span>2 running</span>
+          <span class="pill blk"><span class="d"></span>1 blocked</span>
+          <span class="pill done"><span class="d"></span>1 done</span>
+          <span class="fresh">3 repos · updated 1s ago</span>
+        </div>
+        <div class="cols">
+          <div class="col col-run"><div class="col-h"><span>● Running</span></div>
+            <div class="card run"><div class="t"><span class="d"></span>api-refactor</div>
+              <div class="wt"><span class="repo">repoA</span> · <span class="br">agent/api-refactor</span></div>
+              <div class="wt"><span class="repo">repoB</span> · <span class="br">agent/api-refactor</span></div></div>
+            <div class="card run"><div class="t"><span class="d"></span>ui-polling</div>
+              <div class="wt"><span class="repo">repoA</span> · <span class="br">agent/ui-polling</span></div></div>
+          </div>
+          <div class="col col-blk"><div class="col-h"><span>▲ Blocked</span></div>
+            <div class="card blk"><div class="t"><span class="d"></span>db-migration <span class="badge">waiting on review</span></div>
+              <div class="wt"><span class="repo">repoB</span> · <span class="br">agent/db-migration</span></div></div>
+          </div>
+          <div class="col col-done"><div class="col-h"><span>✓ Done</span></div>
+            <div class="card done"><div class="t"><span class="d"></span>auth-docs</div>
+              <div class="wt"><span class="repo">repoC</span> · <span class="br">agent/auth-docs</span></div></div>
+          </div>
+        </div>
+        <details class="orphan"><summary>1 orphaned annotation</summary>
+          <div class="o"><b>agent/old-spike</b> — branch gone from git, note preserved here</div></details>
+      </div>
+    </div>
+  </section>
+
+  <!-- DIRECTION C -->
+  <section class="dir-wrap">
+    <span class="dir-tag" style="background:#172033;color:#6cb6ff;">Direction C</span>
+    <h2>Dense ops</h2>
+    <p class="dir-desc">Compact, small type, status shown as a colored left-edge bar (the running bar pulses). Minimal chrome, tight spacing — built to hold many tasks at once without scrolling. Closest to a monitoring/ops board.</p>
+    <div class="frame">
+      <div class="dirC">
+        <div class="topbar"><span class="brand">dev-helper-mcp</span>
+          <span class="counts"><span class="r">● 2 running</span><span class="b">▲ 1 blocked</span><span>✓ 1 done</span><span>· 1s ago</span></span></div>
+        <div class="cols">
+          <div class="col col-run"><div class="col-h">Running</div>
+            <div class="card run"><div class="t">api-refactor <span class="st">2 repos</span></div>
+              <div class="wt">repoA <span class="br">agent/api-refactor</span><br>repoB <span class="br">agent/api-refactor</span></div></div>
+            <div class="card run"><div class="t">ui-polling <span class="st">1 repo</span></div>
+              <div class="wt">repoA <span class="br">agent/ui-polling</span></div></div>
+          </div>
+          <div class="col col-blk"><div class="col-h">Blocked</div>
+            <div class="card blk"><div class="t">db-migration <span class="st">waiting</span></div>
+              <div class="wt">repoB <span class="br">agent/db-migration</span></div></div>
+          </div>
+          <div class="col col-done"><div class="col-h">Done</div>
+            <div class="card done"><div class="t">auth-docs <span class="st">merged</span></div>
+              <div class="wt">repoC <span class="br">agent/auth-docs</span></div></div>
+          </div>
+          <div class="orphan">orphaned · agent/old-spike — branch gone, note preserved</div>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>

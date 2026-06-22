@@ -16,6 +16,40 @@ date: '2026-06-19'
 
 _This document builds collaboratively through step-by-step discovery. Sections are appended as we work through each architectural decision together._
 
+> ## ⚠️ AMENDMENT 2026-06-22 — multi-repo / global server (GOVERNING)
+>
+> The PRD was amended (see `prd.md` Amendment note) so v1 is a **single global server per machine**
+> and a **task may span multiple repositories** — one worktree + `agent/<task>` branch **per repo**.
+> Where any decision below assumes one configured repo, read it through these binding changes
+> (each is also applied inline below, tagged `[AMENDED 2026-06-22]`):
+>
+> 1. **No `--repo`; the server is machine-global.** A repo becomes known when a task names it
+>    (the agent passes an **absolute repo path** in `create_task`; validated as a git repo). Every
+>    `run_git` is `-C <repo>` for the relevant repo. One global MCP server registered in Claude Code.
+> 2. **Schema is two tables, task-keyed (NOT one row per branch):** `task(task_id PK = <task> slug,
+>    description, status, created_at, updated_at)` + `task_worktree(task_id, repo_path, branch,
+>    worktree_path, PRIMARY KEY(task_id, repo_path))`. The one-active invariant is now **one active
+>    task per `<task>` slug** (task PK + status), and **one worktree per repo per task**
+>    (task_worktree PK).
+> 3. **Derive-on-read fans out across repos.** For each distinct `repo_path` in `task_worktree`, run
+>    `git -C <repo> worktree list --porcelain` and left-join annotations by `(repo, branch)`. Existence
+>    truth = per-repo git porcelain. The cached view is grouped **by task** (see updated CacheSnapshot).
+> 4. **DB + lockfile are machine-global** (XDG state dir, e.g.
+>    `${XDG_STATE_HOME:-~/.local/state}/dev-helper-mcp/{state.db,server.lock}`), NOT in-repo. Worktrees
+>    still live as siblings of each repo.
+> 5. **Single-instance is per-machine** (one global lockfile + port-bind mutex), not per-repo.
+> 6. **Tool surface = 5 task-centric tools:** `create_task` (replaces `create_worktree` +
+>    `register_task`; creates one worktree per repo, all-or-nothing), `list_worktrees`,
+>    `remove_worktree`, `update_task`, `list_tasks`.
+> 7. **Status is per task** (one status across all its repos). `[AMENDED 2026-06-22b]` Canonical set
+>    is **four** states: `{running, blocked, review, done}` — `blocked`=awaiting user input,
+>    `review`=finished/awaiting review-merge (active, non-`done`), `done`=terminal. Schema `CHECK`,
+>    `update_task` enum, and the dashboard's 4 status columns all reflect this.
+>
+> Unchanged and still binding: derive-on-read purity, the single `run_git()` + two pools, the
+> `{ok,data,error}` envelope, snake_case, 127.0.0.1 bind + Origin validation, the SDK-isolation seam,
+> the two destructive-op guards, `now_iso()`. The CLI loses `--repo`; everything else holds.
+
 ## How to Use This Document (read first)
 
 **Reading order for an implementing agent:**
@@ -31,7 +65,7 @@ _This document builds collaboratively through step-by-step discovery. Sections a
 1. **Every `git` call goes through the single `run_git()` helper** and its correct pool (read vs mutation). Never call `subprocess`/`os.system` for git anywhere else.
 2. **Every tool returns the `{ok, data, error}` envelope.** Core logic raises typed `DevHelperError`; the adapter converts. Never return ad-hoc error dicts; never leak a stack trace.
 3. **All JSON keys are `snake_case`** (tool I/O and `/state`). No camelCase, no translation layer.
-4. **Derive-on-read: never persist derived state.** Git `worktree list --porcelain` is the sole truth for worktree existence; SQLite stores only branch-keyed annotations; the view is recomputed into an ephemeral in-memory cache.
+4. **Derive-on-read: never persist derived state.** `[AMENDED 2026-06-22]` Git `worktree list --porcelain` **per tracked repo** is the sole truth for worktree existence; SQLite stores only task records + their per-repo `(repo_path, branch, worktree_path)` links; the view is recomputed (fanning out across the task set's repos) into an ephemeral in-memory cache.
 5. **`/state` reads the in-memory cache only — never shells out to git on a poll.**
 6. **No blocking call on the asyncio event loop, ever** (git off-loop via `run_git`; DB via `aiosqlite`).
 7. **Core logic imports no `mcp` / `starlette`.** Only the adapter layer (`server_factory`, `server`, `middleware`, `tools/`, `dashboard/`, `lock`, `cli`) touches the SDK — this is the v2-migration seam.
@@ -39,6 +73,7 @@ _This document builds collaboratively through step-by-step discovery. Sections a
 9. **Origin-validation middleware is REQUIRED**, outermost, over `/mcp` AND dashboard routes; bind `127.0.0.1` only (never `0.0.0.0`).
 10. **Destructive git ops never run on the read/refresh path**; two distinct removal guards (`force` for dirty worktree, `force_unmerged_branch` for unmerged-branch deletion).
 11. **Timestamps** via the single `now_iso()` helper: UTC ISO-8601 with `Z`, second precision.
+12. **`[AMENDED 2026-06-22]` Same-repo mutations are serialized by a per-`repo_path` async mutex.** The global lockfile guards only the process singleton; concurrent `create_task`/`remove_worktree` touching the same repo MUST hold that repo's mutex (read/refresh ops do not). `create_task` is **all-or-nothing**: preflight all repos, provision worktrees, commit DB rows last in one transaction; on failure compensate (`worktree remove --force` + `branch -D`); if compensation fails, raise `RollbackIncomplete` (never silent). Full crash-safety is an explicit v1 non-goal.
 
 ### Decisions at a Glance
 
@@ -47,14 +82,15 @@ _This document builds collaboratively through step-by-step discovery. Sections a
 | Language / runtime | Python ≥3.10 (target 3.12), uv | user pref, mature SDK, fast tooling |
 | MCP framework | official `mcp` SDK v1.28.0, pinned `>=1.28,<2` | reference impl; v2 (2026-07-27) is breaking |
 | Transport | Streamable HTTP, long-lived 127.0.0.1 process | only model supporting a persistent shared dashboard |
+| Topology `[AMENDED]` | single **machine-global** server (no `--repo`); tasks span repos | one glance across every repo in flight; repos supplied per task |
 | HTTP host | app-owned Starlette; `Mount("/mcp")` + dashboard | one middleware chokepoint, no extra web dep |
 | Persistence | SQLite via `aiosqlite`, WAL, one `Store` module | event-loop-safe; drift is a model not engine problem |
 | Consistency model | **derive-on-read** into ephemeral in-memory cache | makes permanent git↔DB drift structurally impossible |
-| Schema | one row per branch (`branch` PK), no partial index | PK *is* the one-active invariant; no dead DDL |
+| Schema `[AMENDED]` | two tables: `task` (PK=`<task>` slug) + `task_worktree` (PK=`task_id,repo_path`) | task spans repos; task PK = one-active-per-slug; link PK = one worktree per repo |
 | Migrations | version-check only (`PRAGMA user_version`) | YAGNI for one table |
 | Async git | one `run_git()`, 2 pools: read 3s/sem2, mutation ~120s/sem4 | protects the ≤3s read SLA; create can be slow |
 | Tool I/O | Pydantic `*In` models; `{ok,data,error}` envelope; snake_case | free schema/validation; agent branches on `error.code` |
-| Single-instance | port auto-fallback 8765→8775; lockfile; port-bind = mutex | zero 2nd-repo friction; tight error semantics |
+| Single-instance `[AMENDED]` | **machine-global** lockfile + port-bind mutex (8765→8775 fallback) | one server per machine; tight error semantics |
 | Distribution | console entry point via `uv tool install` | clean daily-use command |
 | CI | none for v1; **enforced pre-commit** `ruff`+`pytest` | solo tool; enforcement replaces CI's gate |
 | Platform | Linux-first; lock identity guard degrades on non-Linux | matches NFR-Portability |
@@ -71,13 +107,14 @@ _This document builds collaboratively through step-by-step discovery. Sections a
   out of scope, so `agent/<task>` branches accumulate unmerged commits — the real
   data-loss path.
 - *Per-Agent Task Tracking (FR-4–7):* small task-annotation model; fixed status set
-  {running, blocked, done}; sequential reuse after done.
+  {running, blocked, review, done} `[AMENDED 2026-06-22b]` (blocked=awaiting input, review=awaiting the operator's review — tool does not merge; review is non-done/active); sequential reuse after done.
 - *Live Web Dashboard (FR-8–10):* read-only, auto-refreshing view of repo × worktrees
   × tasks; no mutating routes.
 - *MCP Server & Tool Surface (FR-11):* ~7 discoverable, documented tools; surface stays
   small, well under client tool caps (~40).
-- *State Persistence & Lifecycle (FR-12–13):* annotations survive restart; one long-lived
-  localhost process per repo, single-instance, started separately by the developer.
+- *State Persistence & Lifecycle (FR-12–13):* `[AMENDED 2026-06-22]` task records survive restart;
+  one long-lived localhost process **per machine** (global), single-instance, started separately by
+  the developer; serves all repos.
 
 **Non-Functional Requirements (architecture drivers):**
 - *Non-blocking event loop:* protocol-synchronous tools, but NO git shell-out or blocking
@@ -107,6 +144,12 @@ _This document builds collaboratively through step-by-step discovery. Sections a
 
 ### Key Architectural Direction (set during Party Mode pressure-test)
 
+> `[AMENDED 2026-06-22]` This subsection predates the multi-repo amendment and is **context, not
+> contract**. Read "keyed by branch name" / "one running annotation per BRANCH" as superseded by the
+> governing amendment: state is keyed by **task** (`task` + `task_worktree` tables), one active task
+> per **`<task>` slug**, derive-on-read fans `git worktree list` out **per repo**. The derive-on-read
+> *principle* below is unchanged.
+
 - **Derive-on-read, NOT reconcile-and-store.** Git (`git worktree list --porcelain`) is
   the SOLE source of truth for worktree existence. The DB stores ONLY task annotations
   keyed by **branch name** (`agent/<task>`). The dashboard/list view is recomputed per
@@ -115,7 +158,8 @@ _This document builds collaboratively through step-by-step discovery. Sections a
   state. This makes permanent git↔DB drift (R3) structurally impossible and removes the
   reconciliation state machine entirely (R2).
 - **Persistence: SQLite (WAL + busy_timeout).** Confirmed as the right store; DB choice is
-  orthogonal to drift. Schema centers on a single `task_annotation` table keyed by branch.
+  orthogonal to drift. `[AMENDED 2026-06-22]` Schema is two tables — `task` (keyed by `<task>` slug)
+  + `task_worktree` (per-repo links) — not the original single branch-keyed `task_annotation` table.
 - **One-active-task invariant:** "at most one running annotation per BRANCH" enforced by a
   partial unique index. The stronger "per worktree" form is read-time-observable only —
   an accepted, documented enforcement downgrade at single-dev scale.
@@ -125,8 +169,8 @@ _This document builds collaboratively through step-by-step discovery. Sections a
 ### Technical Constraints & Dependencies
 
 - Python + official MCP SDK (`mcp`); Streamable HTTP transport (D10) — NOT stdio.
-- Long-lived, separately-launched process bound to 127.0.0.1; one instance per repo,
-  registered in Claude Code as an HTTP/URL MCP server.
+- `[AMENDED 2026-06-22]` Long-lived, separately-launched process bound to 127.0.0.1; one instance
+  **per machine** (global), registered once in Claude Code as an HTTP/URL MCP server shared across repos.
 - Git via the `git` CLI; subprocess env pinned (`GIT_TERMINAL_PROMPT=0`,
   `GIT_OPTIONAL_LOCKS=0`, explicit `-C <repo>`/cwd); NUL-delimited (`-z`) porcelain parsing.
 - No mature native async MCP task primitive relied upon (SEP-1391/1686 emerging only).
@@ -269,31 +313,39 @@ detectable orphan); multi-repo; CI pipeline; SQLite migration *runner* (version-
 - **Engine/driver:** SQLite via `aiosqlite`, behind one `Store` module; parameterized queries
   only; no ORM. Explicit `PRAGMA journal_mode=WAL` + `PRAGMA busy_timeout` at bootstrap (a
   polling dashboard reads while tools write — WAL avoids `SQLITE_BUSY`).
-- **DB location:** in-repo `<repo>/.dev-helper-mcp/state.db`, gitignored (server ensures the
-  ignore entry on first run). Worktrees live in a sibling dir, so DB and worktrees never nest.
-- **Schema (single table, one row per branch — the PK IS the invariant):**
+- **DB location `[AMENDED 2026-06-22]`:** **machine-global** at
+  `${XDG_STATE_HOME:-~/.local/state}/dev-helper-mcp/state.db` (alongside `server.lock`) — NOT
+  in-repo, because one server spans repos. Worktrees still live in each repo's sibling dir.
+- **Schema (two tables — `[AMENDED 2026-06-22]` task is first-class, owns per-repo worktree links):**
   ```sql
-  CREATE TABLE IF NOT EXISTS task_annotation (
-    branch        TEXT PRIMARY KEY,                 -- agent/<task>; stable under `git worktree move`
+  CREATE TABLE IF NOT EXISTS task (
+    task_id       TEXT PRIMARY KEY,                  -- the <task> slug; one active task per slug
     description   TEXT NOT NULL,
-    status        TEXT NOT NULL CHECK (status IN ('running','blocked','done')),
+    status        TEXT NOT NULL CHECK (status IN ('running','blocked','review','done')), -- [AMENDED 2026-06-22b] +review (blocked=awaiting input, review=awaiting review)
     created_at    TEXT NOT NULL,                     -- UTC ISO-8601
     updated_at    TEXT NOT NULL
   );
-  -- NO partial unique index: branch PK already guarantees one row/branch (the prior index was dead DDL).
+  CREATE TABLE IF NOT EXISTS task_worktree (
+    task_id       TEXT NOT NULL REFERENCES task(task_id) ON DELETE CASCADE,
+    repo_path     TEXT NOT NULL,                     -- absolute repo path
+    branch        TEXT NOT NULL,                     -- agent/<task> (same slug across this task's repos)
+    worktree_path TEXT NOT NULL,
+    PRIMARY KEY (task_id, repo_path)                 -- one worktree per repo per task
+  );
   ```
-  Re-tasking a branch is an **UPSERT** (overwrite description/status, preserve `created_at`,
-  advance `updated_at`). No task history in v1 (YAGNI; a history model would need a surrogate
-  `id` + the partial index — deferred).
-- **Source of truth:** git `worktree list --porcelain` for worktree existence; the table holds
-  ONLY task annotations.
+  `PRAGMA foreign_keys=ON` at bootstrap so the cascade holds. Re-tasking a slug after `done` is an
+  **UPSERT** on `task` (overwrite description/status, preserve `created_at`, advance `updated_at`)
+  plus a refresh of its `task_worktree` rows. No task history in v1 (YAGNI).
+- **Source of truth:** git `worktree list --porcelain` **per tracked repo** for worktree existence;
+  the tables hold ONLY task records + their per-repo worktree linkage.
 - **Migrations:** **version-check only** — store `PRAGMA user_version`; on startup refuse to
   open a DB from a *newer* version with a clear error; otherwise `CREATE TABLE IF NOT EXISTS`.
   No migration runner until a real v2 schema exists.
-- **Orphaned-annotation rule (the core derive-on-read consistency rule):** an annotation whose
-  branch is absent from `git worktree list` is **shown, flagged as orphaned, NEVER auto-deleted
-  and never auto-`done`** — a git operation must never silently eat the one non-derivable thing
-  we store.
+- **Orphaned-link rule (the core derive-on-read consistency rule) `[AMENDED 2026-06-22]`:** a
+  `task_worktree` link whose `branch` is absent from its repo's `git worktree list` is **shown,
+  flagged as orphaned, NEVER auto-deleted and never auto-`done`** — a git operation must never
+  silently eat the non-derivable task records we store. A task all of whose links are orphaned is
+  surfaced as a fully-orphaned task, not dropped.
 
 ### Derived State & Refresh Model
 
@@ -307,27 +359,36 @@ detectable orphan); multi-repo; CI pipeline; SQLite migration *runner* (version-
 - Cache payload carries `generated_at`; if a refresh fails (git unavailable), the cache keeps
   last-known state and marks it stale rather than going blank.
 
-- **Cached view shape (pinned — the ONLY shape `/state` and the refresh tick share):**
+- **Cached view shape (pinned — the ONLY shape `/state` and the refresh tick share) `[AMENDED
+  2026-06-22]` — grouped by task across repos:**
   ```
   CacheSnapshot:
     generated_at: str              # now_iso()
-    worktrees:    list[WorktreeView]   # sorted by branch ASC (stable order)
-    warnings:     list[str]            # non-fatal notes, e.g. "orphan_annotation:<branch>"; [] when clean
+    tasks:        list[TaskView]       # sorted by task_id ASC (stable order)
+    warnings:     list[str]            # non-fatal notes, e.g. "orphan_link:<task_id>@<repo>:<branch>"; [] when clean
+  TaskView:
+    task_id:     str               # the <task> slug
+    description: str | None        # annotation; None only if a worktree exists with no task (task-less)
+    status:      str | None        # task status; None when task-less
+    created_at:  str | None
+    updated_at:  str | None
+    worktrees:   list[WorktreeView]    # one per repo this task touches; sorted by repo_path ASC
   WorktreeView:
-    branch:      str               # join key, porcelain-derived
-    path:        str | None        # absolute worktree path; None for an annotation-only orphan
+    repo_path:   str               # which repo (absolute)
+    branch:      str               # agent/<task>; join key within the repo
+    path:        str | None        # absolute worktree path; None for a link-only orphan
     head:        str | None        # short sha
     detached:    bool
     locked:      bool              # porcelain 'locked'
     prunable:    bool              # porcelain 'prunable'
-    status:      str | None        # annotation status; None when no DB row
-    created_at:  str | None        # annotation
-    updated_at:  str | None        # annotation
+    orphaned:    bool              # link present in DB, branch absent from this repo's porcelain
   ```
-  **Join rule:** porcelain is the row set (existence); DB annotations LEFT-JOIN on `branch`. An
-  annotation whose branch is absent from porcelain is NOT emitted as a row — it is surfaced in
-  `warnings` as `orphan_annotation:<branch>` (consistent with the orphaned-annotation rule). The
-  snapshot is **immutable and swapped whole** (never mutated in place).
+  **Join rule:** for each tracked repo, porcelain is the existence set; `task_worktree` links
+  LEFT-JOIN on `(repo_path, branch)`. A worktree present in git with no link → emitted under a
+  synthetic task-less entry (or a dedicated `untracked` bucket). A link whose branch is absent from
+  its repo's porcelain → emitted with `orphaned: true` AND noted in `warnings` as
+  `orphan_link:<task_id>@<repo>:<branch>`. The snapshot is **immutable and swapped whole** (never
+  mutated in place).
 
 - **Mutation critical-section ordering (pinned — a tool never returns `ok` on stale state):**
   ```
@@ -357,8 +418,36 @@ detectable orphan); multi-repo; CI pipeline; SQLite migration *runner* (version-
 ### API & Communication Patterns
 
 - **Transport:** MCP Streamable HTTP via official SDK, mounted at `/mcp` (Step 3 wiring).
-- **Tool surface (~7):** `create_worktree`, `list_worktrees`, `remove_worktree`,
-  `register_task`, `update_task`, `list_tasks` (final names/schemas pinned in patterns step).
+- **Tool surface (5) `[AMENDED 2026-06-22]`:** `create_task` (creates the task + one worktree per
+  supplied repo, **all-or-nothing**; replaces the old `create_worktree`+`register_task` pair),
+  `list_worktrees`, `remove_worktree`, `update_task`, `list_tasks` (final names/schemas pinned in
+  patterns step). `create_task` inputs: `task_name`, `description`, `repos: [abs_path,…]` (1+),
+  `base_ref?` (default each repo's HEAD); output `{task_id, status, worktrees:[{repo_path,
+  worktree_path, branch}]}`.
+- **`create_task` atomicity & rollback (AR-13) `[AMENDED 2026-06-22, decided 2026-06-22]`:**
+  - **Preflight first:** validate ALL repo paths (git repo? `agent/<task>` branch/dir free? base ref
+    exists?) before mutating ANY repo — the cheapest rollback is not starting (`NotAGitRepo`,
+    `BranchExists`, `WorktreePathInUse`, `BaseRefNotFound` raised before any `worktree add`).
+  - **Ordering:** provision all worktrees first; write the `task` + `task_worktree` rows **LAST**, in a
+    single SQLite transaction, only on full success. A crash before the commit leaves NO DB rows.
+  - **Error-safe (REQUIRED):** if a `worktree add` fails after earlier repos succeeded, compensate —
+    `git worktree remove --force` + `git branch -D agent/<task>` for each already-created repo — and
+    write no rows. Teardown order is the reverse of creation; each compensation result is captured.
+  - **`RollbackIncomplete`:** if a compensating teardown itself fails, do NOT swallow it — return
+    `RollbackIncomplete` whose `details` names the repo paths left orphaned, preserving the original
+    cause. Silent partial state is forbidden.
+  - **Crash-safety = documented v1 NON-GOAL:** a SIGKILL/OOM mid-`create_task` may leave an orphaned
+    worktree/branch (no DB rows, per ordering). It is **surfaced** by derive-on-read as an untracked
+    worktree on the dashboard and re-collides (`BranchExists`) on a same-name retry — visible and
+    recoverable, never silent corruption. No startup reconciliation sweep is built in v1 (keeps the
+    deliberately-designed-out reconciliation engine out).
+- **Per-repo mutation mutex (concurrency safety) `[AMENDED 2026-06-22, decided 2026-06-22]`:** the
+  global lockfile guards the **process singleton**, NOT per-repo mutation safety. Because two
+  concurrent `create_task`/`remove_worktree` calls may touch the **same repo** (e.g. `repos=[x,y]`
+  and `[y,z]`) and the mutation pool (sem=4) is a concurrency *limiter* not a mutual-exclusion lock,
+  an in-process **async mutex keyed by `repo_path`** serializes mutations to the same repo. Read/refresh
+  git ops do not take it. (Without this, concurrent same-repo `git worktree add` races — a data-loss
+  path Murat flagged.)
 - **Async-git execution — TWO latency classes, separate permit pools (the ≤3s SLA fix):**
   - *Read/refresh class* (`worktree list`, status, unreachable-commit count): **3s** per-command
     timeout, pool **semaphore=2**, **2s acquire timeout** (fail fast / keep cache rather than
@@ -369,14 +458,19 @@ detectable orphan); multi-repo; CI pipeline; SQLite migration *runner* (version-
   - Both: off the event loop via `create_subprocess_exec`; on timeout `kill()` + `await wait()`
     (no zombies); both pipes drained; env pinned (`GIT_TERMINAL_PROMPT=0`, `GIT_OPTIONAL_LOCKS=0`,
     `-C <repo>`); `-z` NUL-delimited porcelain parsing; failed git ops leave the repo unchanged.
-- **Slug rules (`<task>`):** lowercase, hyphenate, collapse duplicate/leading/trailing hyphens,
-  **max length 60**; reject empty/reserved/`.`/`..`; branch = `agent/<task>`; collision (branch
-  OR target dir exists) → structured reject (no silent suffixing).
+- **Slug rules (`<task>`) `[AMENDED 2026-06-22]`:** lowercase, hyphenate, collapse
+  duplicate/leading/trailing hyphens, **max length 60**; reject empty/reserved/`.`/`..`; the slug is
+  the `task_id` and the `agent/<task>` branch name used in **every** repo the task spans; collision
+  (branch OR target dir exists in **any** requested repo) → structured reject, create is
+  all-or-nothing across repos (no silent suffixing).
 - **Error taxonomy (typed, stable `code`):** `BranchExists`, `WorktreePathInUse`,
   `BaseRefNotFound`, `DirtyWorktree`, `UnmergedBranch`, `TaskNotFound`, `ActiveTaskConflict`,
-  `LockedWorktree`, `InvalidTaskName`, `GitTimeout`, `InstanceConflict` (reserved for
-  same-repo-already-running with a live, identity-matched pid), `PortUnavailable` (explicit
-  `--port` bind failed). Each `{code, message, details}`.
+  `LockedWorktree`, `InvalidTaskName`, `GitTimeout`, `InstanceConflict` (`[AMENDED 2026-06-22]`
+  reserved for **same-machine**-already-running with a live, identity-matched pid), `NotAGitRepo`
+  (`[AMENDED 2026-06-22]` a supplied repo path is not a git repository), `RollbackIncomplete`
+  (`[AMENDED 2026-06-22]` a `create_task` compensating teardown itself failed — `details` lists the
+  repo paths left orphaned; the original cause is preserved), `PortUnavailable` (explicit `--port`
+  bind failed). Each `{code, message, details}`.
 - **Removal force-flag semantics (two distinct guards — distinct blast radii, hence two flags):**
   `force` → dirty/locked *worktree* removal (`git worktree remove --force`); `force_unmerged_branch`
   → *branch* deletion with unmerged commits (`git branch -D` vs `-d`), surfacing the
@@ -387,7 +481,13 @@ detectable orphan); multi-repo; CI pipeline; SQLite migration *runner* (version-
 - **Read-only** Starlette routes + a `/state` JSON endpoint (served from the in-memory cache);
   no mutating routes.
 - **Refresh:** client polls `/state` every ~1–2s. Worst-case freshness = tick interval + poll
-  interval, kept within the ≤3s soft SLO.
+  interval, kept within the ≤3s soft SLO `[AMENDED 2026-06-22]` **bounded to ≤15 tracked repos**
+  (beyond that the per-repo `git worktree list` fan-out under the read pool — sem=2, 3s timeout, 2s
+  acquire — can exceed the budget; the SLO is explicitly conditional, not unbounded).
+- **Per-repo fan-out degradation (decided 2026-06-22):** the refresh fans `git worktree list` across
+  every tracked repo via the read pool. A slow/timed-out repo **degrades that repo only** — its
+  worktrees render as "unavailable"/last-known while the rest of the board renders normally. One slow
+  (e.g. monorepo / networked) repo MUST NOT blank or fail the whole dashboard.
 - **Presentation guardrails (protect the <10s glance / SM-2):**
   - `generated_at` rendered **subordinate** (small, cornered; greys/ambers when stale) — proof
     of freshness, not a headline.
@@ -396,17 +496,27 @@ detectable orphan); multi-repo; CI pipeline; SQLite migration *runner* (version-
   - **Render is stable across polls** — DOM changes only when *state* changes (no per-poll
     animation/reflow).
 - **git-unavailable degradation:** show labeled last-known state, never a blank dashboard.
-- **UI:** minimal server-rendered HTML + a tiny vanilla-JS poller; no SPA/build tooling.
+- **UI:** minimal server-rendered HTML + a tiny vanilla-JS poller; no SPA/build tooling. `[AMENDED
+  2026-06-22b]` The visual + experience contract is the **UX spec** at
+  `ux-designs/ux-dev-helper-mcp-2026-06-22/` (`DESIGN.md` tokens + `EXPERIENCE.md` IA/states/flows,
+  reference mock `mockups/key-screen-board.html`): a dark, compact "modern console" board of **three
+  active status columns** (Running | Blocked | Review) with `done` as a foldable `✓ N done` count
+  below, status triple-encoded (column + left bar + per-card glyph), **blocked-emphasized** (the only
+  lifted card), **no motion**, **diff-and-patch poller** (stable render), self-contained (no external
+  assets). UX-DR1–13 are enumerated there and carried in the epics.
 
 ### Infrastructure & Deployment
 
-- **Process:** single long-lived process per repo, started by the developer
-  (`dev-helper-mcp --repo <path> [--port N]`), serving MCP + dashboard from one event loop;
-  prints the dashboard URL on startup.
+- **Process `[AMENDED 2026-06-22]`:** single long-lived **machine-global** process, started by the
+  developer (`dev-helper-mcp [--port N]` — **no `--repo`**), serving MCP + dashboard for all repos
+  from one event loop; prints the dashboard URL on startup. Repos are discovered per task (absolute
+  path in `create_task`), validated as git repos before use.
 - **Port:** default scan **8765→8775**, bind first free; `--port N` is a **strict override**
   (bind N or fail with `PortUnavailable`). The actual bound port is written to the lockfile and
   printed — the dashboard reads the lockfile, never a hardcoded constant.
-- **Single-instance + lockfile (`.dev-helper-mcp/server.lock`, `{pid, port, start_ts}`):**
+- **Single-instance + lockfile `[AMENDED 2026-06-22]` (machine-global
+  `${XDG_STATE_HOME:-~/.local/state}/dev-helper-mcp/server.lock`, `{pid, port, start_ts}`) — one
+  instance per machine, not per repo:**
   - **Atomic create** via `os.open(O_CREAT|O_EXCL)` (serializes concurrent starts — kills TOCTOU).
   - On `EEXIST`, **stale check**: pid liveness (`os.kill(pid,0)`) **plus** an identity guard
     against pid reuse; dead/unrelated → **atomic-rename takeover**. The identity guard is
@@ -432,9 +542,9 @@ detectable orphan); multi-repo; CI pipeline; SQLite migration *runner* (version-
 2. SDK adapter/`server_factory` (mount `/mcp`, lifespan, Origin middleware) + Origin/transport tests.
 3. `Store` (aiosqlite, schema, UPSERT, version-check) + slug validation + error taxonomy.
 4. Async-git layer: read/refresh + mutation pools, timeouts, `-z` porcelain parsing.
-5. Worktree tools (create/list/remove) + task tools (register/update/list).
-6. Derived-state cache + background refresher + `/state` + dashboard UI/polling + presentation guardrails.
-7. Single-instance lockfile protocol + port auto-fallback + CLI (`--repo`, `--port`, `stop`) + startup URL.
+5. `[AMENDED]` Task-centric tools: `create_task` (multi-repo, all-or-nothing) + `list_worktrees`/`remove_worktree` + `update_task`/`list_tasks`.
+6. Derived-state cache (multi-repo fan-out, grouped by task) + background refresher + `/state` + dashboard UI/polling + presentation guardrails.
+7. `[AMENDED]` Machine-global single-instance lockfile protocol + port auto-fallback + CLI (`--port`, `stop` — no `--repo`) + startup URL.
 
 **Cross-component dependencies:**
 - Origin middleware sits above BOTH the MCP mount and dashboard routes (one chokepoint).
@@ -475,14 +585,15 @@ divergent choice. They govern HOW to implement, not WHAT. All are mandatory unle
   (`store.py`, `git_ops.py`, `cache.py`, `lock.py`, `errors.py`, `server_factory.py`, `cli.py`).
 
 **MCP tools:**
-- Tool names are `snake_case`, verb-first: `create_worktree`, `list_worktrees`,
-  `remove_worktree`, `register_task`, `update_task`, `list_tasks`.
+- Tool names are `snake_case`, verb-first `[AMENDED 2026-06-22]`: `create_task`, `list_worktrees`,
+  `remove_worktree`, `update_task`, `list_tasks` (5 tools; `create_task` subsumes the old
+  `create_worktree`+`register_task`).
 - Tool input/output JSON fields are `snake_case` (`task_name`, `base_ref`, `worktree_path`,
   `task_id`, `created_at`).
 
 **Database:**
-- Table/column names `snake_case` (`task_annotation`, `created_at`). Status literals lowercase
-  (`running`/`blocked`/`done`).
+- Table/column names `snake_case` (`task`, `task_worktree`, `created_at`). Status literals lowercase
+  (`running`/`blocked`/`review`/`done`) `[AMENDED 2026-06-22b]`.
 
 ### Data & Format Patterns
 
@@ -510,8 +621,9 @@ divergent choice. They govern HOW to implement, not WHAT. All are mandatory unle
   leaks a raw stack trace to the client.
 - **`error.code`** is from the fixed Step-4 taxonomy (`BranchExists`, `WorktreePathInUse`,
   `BaseRefNotFound`, `DirtyWorktree`, `UnmergedBranch`, `TaskNotFound`, `ActiveTaskConflict`,
-  `LockedWorktree`, `InvalidTaskName`, `GitTimeout`, `InstanceConflict`, `PortUnavailable`,
-  `Internal`). Codes are stable contract; messages may change.
+  `LockedWorktree`, `InvalidTaskName`, `GitTimeout`, `InstanceConflict`, `NotAGitRepo`,
+  `RollbackIncomplete`, `PortUnavailable`, `Internal`). `[AMENDED 2026-06-22]` `NotAGitRepo` and
+  `RollbackIncomplete` added for multi-repo. Codes are stable contract; messages may change.
 
 ### Structure & Process Patterns
 
@@ -550,10 +662,11 @@ are made here in the architecture doc first, then propagated — not invented ad
 
 **Good:**
 ```python
-# tool adapter
-async def create_worktree(inp: CreateWorktreeIn) -> dict:
+# tool adapter  [AMENDED 2026-06-22: task-centric, multi-repo]
+async def create_task(inp: CreateTaskIn) -> dict:
     try:
-        result = await worktrees.create(inp.task_name, base_ref=inp.base_ref)  # plain args
+        result = await tasks.create(inp.task_name, inp.description, inp.repos,
+                                     base_ref=inp.base_ref)  # plain args; all-or-nothing across repos
         return {"ok": True, "data": result}
     except DevHelperError as e:
         return {"ok": False, "error": e.as_dict()}   # {code, message, details}
@@ -581,9 +694,9 @@ dev-helper-mcp/
 │   └── dev_helper_mcp/
 │       ├── __init__.py
 │       ├── __main__.py            # `python -m dev_helper_mcp` → cli.main()
-│       ├── cli.py                 # arg parsing: --repo, --port, `stop`/--release-lock; dispatch
+│       ├── cli.py                 # arg parsing: --port, `stop`/--release-lock; dispatch (NO --repo)
 │       ├── config.py              # Settings/constants: DEFAULT_PORT=8765, PORT_RANGE, timeouts,
-│       │                          #   pool sizes, paths (.dev-helper-mcp/state.db, server.lock)
+│       │                          #   pool sizes, GLOBAL paths (XDG_STATE_HOME/dev-helper-mcp/{state.db,server.lock})
 │       ├── errors.py              # DevHelperError base + per-code subclasses; .as_dict() → {code,message,details}
 │       ├── util.py                # now_iso() and other tiny pure helpers
 │       │
@@ -598,7 +711,7 @@ dev-helper-mcp/
 │       │                          #   atomic-rename takeover, release on shutdown
 │       ├── tools/
 │       │   ├── __init__.py
-│       │   ├── models.py          # Pydantic *In models (CreateWorktreeIn, RegisterTaskIn, …)
+│       │   ├── models.py          # Pydantic *In models (CreateTaskIn{task_name,description,repos[],base_ref?}, UpdateTaskIn, …)
 │       │   └── handlers.py        # tool adapters: validate → call core → {ok,data,error} envelope
 │       ├── dashboard/
 │       │   ├── __init__.py
@@ -606,13 +719,13 @@ dev-helper-mcp/
 │       │   └── static/
 │       │       ├── index.html
 │       │       ├── app.js         # poll /state ~1–2s; stable render; subordinate generated_at
-│       │       └── style.css      # running/blocked/done badges; demoted orphan section
+│       │       └── style.css      # 4 status columns/badges (running/blocked/review/done); demoted orphan section
 │       │
 │       │   # ── Core logic layer (NO mcp / starlette imports — the v2-migration seam) ──
 │       ├── core/
 │       │   ├── __init__.py
-│       │   ├── worktrees.py       # create/list/remove logic; plain args; raises DevHelperError
-│       │   ├── tasks.py           # register/update/list logic; UPSERT semantics
+│       │   ├── worktrees.py       # per-repo create/list/remove logic; plain args; raises DevHelperError
+│       │   ├── tasks.py           # create_task (multi-repo, all-or-nothing)/update/list; UPSERT; task+task_worktree
 │       │   └── slug.py            # task-name validation + slugify (pinned regex, max 60, reject rules)
 │       ├── git/
 │       │   ├── __init__.py
@@ -630,17 +743,19 @@ dev-helper-mcp/
     ├── test_server_factory.py     # mount works, lifespan starts session mgr, /mcp no 307
     ├── test_middleware_origin.py  # Origin matrix on /mcp AND /state (403/allow)
     ├── test_smoke_uvicorn.py      # real ephemeral port; asserts bind 127.0.0.1 not 0.0.0.0
-    ├── test_store.py              # schema, UPSERT, version-check, WAL
+    ├── test_store.py              # two-table schema + FK cascade, UPSERT, version-check, WAL
     ├── test_git_runner.py         # timeout→kill+reap, pool bounds, acquire timeout, env
     ├── test_porcelain.py          # fixture corpus parse
-    ├── test_worktrees.py          # create/list/remove + error codes
-    ├── test_tasks.py              # register/update/list + status CHECK
+    ├── test_worktrees.py          # per-repo create/list/remove + error codes
+    ├── test_tasks.py              # create_task multi-repo + all-or-nothing rollback + NotAGitRepo + update/list + status CHECK + one-active-per-slug
     ├── test_slug.py               # valid/invalid names, collision reject
-    ├── test_projection.py         # purity (no writes), orphan detection, idempotent view
-    ├── test_cache.py              # refresh tick, stale generated_at on git-unavailable
-    ├── test_lock.py               # O_EXCL, stale takeover, pid-reuse, concurrent-start, port mutex
+    ├── test_projection.py         # purity (no writes), orphan detection, idempotent view, multi-repo grouping by task
+    ├── test_cache.py              # refresh tick, stale generated_at on git-unavailable, per-repo degrade (slow repo → that repo "unavailable", board still renders)
+    ├── test_perf_fanout.py        # [AMENDED] param (num_tasks, repos_per_task); slow-repo injector (asyncio.sleep); assert p95 derive ≤3s for ≤15 repos; 2s-acquire cliff under concurrent readers
+    ├── test_concurrency.py        # [AMENDED] per-repo mutex serializes same-repo create_task/remove; two create_task touching shared repo don't race
+    ├── test_lock.py               # O_EXCL, stale takeover (dead PID reclaim / live PID refuse), pid-reuse, concurrent-start, port mutex
     ├── test_tools.py              # uniform envelope shape, error-as-data, snake_case keys
-    └── test_cli.py                # --repo/--port/stop dispatch, port auto-fallback
+    └── test_cli.py                # --port/stop dispatch (no --repo), port auto-fallback
 ```
 
 ### Architectural Boundaries
@@ -669,8 +784,8 @@ envelope; handlers never contain git/DB logic.
 
 | FR group | Lives in |
 |---|---|
-| **FR-1–3** Worktree management | `core/worktrees.py`, `git/runner.py`, `git/porcelain.py`, `core/slug.py`, `tools/handlers.py` |
-| **FR-4–7** Per-agent task tracking | `core/tasks.py`, `store.py`, `tools/handlers.py`, `tools/models.py` |
+| **FR-1–3** Worktree management `[AMENDED]` | `core/worktrees.py` (per-repo), `core/tasks.py` (create_task orchestrates across repos), `git/runner.py` (`-C <repo>`), `git/porcelain.py`, `core/slug.py`, `tools/handlers.py` |
+| **FR-4–7** Per-agent task tracking `[AMENDED]` | `core/tasks.py` (task + task_worktree, multi-repo), `store.py` (two tables), `tools/handlers.py`, `tools/models.py` |
 | **FR-8–10** Live dashboard | `dashboard/`, `cache.py`, `projection.py` |
 | **FR-11** MCP tool surface | `server_factory.py`, `tools/` |
 | **FR-12** Persistence + git consistency | `store.py`, `projection.py`, `cache.py` (derive-on-read) |
@@ -684,16 +799,17 @@ envelope; handlers never contain git/DB logic.
 
 ### Integration Points & Data Flow
 
-**Tool call (mutation, e.g. create_worktree):**
-`Claude Code → /mcp → FastMCP → tools/handlers → core/worktrees → git/runner (mutation pool) +
-store (UPSERT) → cache.refresh() → envelope back to agent.`
+**Tool call (mutation, e.g. create_task across N repos) `[AMENDED 2026-06-22]`:**
+`Claude Code → /mcp → FastMCP → tools/handlers → core/tasks → (for each repo) git/runner (mutation
+pool) worktree add + store UPSERT task & task_worktree rows → cache.refresh() → envelope back to
+agent. All-or-nothing: on any repo failing, roll back already-created worktrees and the task rows.`
 
 **Dashboard poll (read path, never touches git):**
 `browser → GET /state → dashboard/routes → reads cache (in-memory) → JSON {…, generated_at}.`
 
-**Background refresh:**
-`cache tick → git/runner (read pool, ` + "`git worktree list --porcelain -z`" + `) + store.read_all() →
-projection.derive() → atomically replace in-memory cache.`
+**Background refresh `[AMENDED 2026-06-22]`:**
+`cache tick → for each distinct repo in task_worktree: git/runner (read pool, ` + "`git -C <repo> worktree list --porcelain -z`" + `) + store.read_all() →
+projection.derive() (group by task across repos) → atomically replace in-memory cache.`
 
 **External integrations:** none beyond the local `git` binary. No network egress, no telemetry.
 
@@ -704,16 +820,18 @@ projection.derive() → atomically replace in-memory cache.`
 - **Tests:** `tests/` mirrors modules; `test_<module>.py`; shared fixtures in `conftest.py`;
   git-output corpus in `tests/fixtures/porcelain/`.
 - **Static assets:** `dashboard/static/` (shipped inside the package; served by Starlette).
-- **Runtime state (NOT in the package):** `<repo>/.dev-helper-mcp/{state.db, server.lock}` — created
-  at runtime in the target repo, gitignored, never inside `src/`.
+- **Runtime state (NOT in the package) `[AMENDED 2026-06-22]`:** machine-global
+  `${XDG_STATE_HOME:-~/.local/state}/dev-helper-mcp/{state.db, server.lock}` — created at runtime per
+  machine (not per repo), never inside `src/`. (Worktrees still live as siblings of each repo.)
 
 ### Development Workflow Integration
 
-- **Dev run:** `uv run dev-helper-mcp --repo .` (or `uv run python -m dev_helper_mcp`).
+- **Dev run `[AMENDED 2026-06-22]`:** `uv run dev-helper-mcp` (no `--repo`; the server is global and
+  learns repos from `create_task`). Optionally `--port N`. (or `uv run python -m dev_helper_mcp`).
 - **Build/dist:** `uv build` (uv_build backend, `src/` layout); install via `uv tool install`.
 - **Quality gate (local):** `ruff check`, `ruff format --check`, `pytest` (in-process ASGI
   harness + the one real-port smoke test).
-- **Deployment:** none — the developer installs the console tool and runs one process per repo.
+- **Deployment `[AMENDED 2026-06-22]`:** none — the developer installs the console tool and runs one global process per machine.
 
 ## Architecture Validation Results
 
@@ -756,8 +874,9 @@ in the PRD-Fidelity Gate (FR-12): the intent — "the dashboard never shows a st
 git" — is preserved, and no FR is dropped.
 
 **Non-Functional Requirements Coverage:**
-- *Performance:* two-pool model with a 3s read timeout protects the ≤3s soft read SLA; mutation
-  pool bounded well under the ~5-min transport ceiling.
+- *Performance:* two-pool model with a 3s read timeout protects the ≤3s soft read SLA `[AMENDED
+  2026-06-22]` **bounded to ≤15 tracked repos**; per-repo fan-out degrades a slow repo individually
+  rather than failing the aggregate. Mutation pool bounded well under the ~5-min transport ceiling.
 - *Security/Locality:* 127.0.0.1 bind (smoke-tested) + outermost Origin-validation middleware over
   `/mcp` and dashboard routes (DNS-rebinding defense).
 - *MCP-Compatibility:* protocol-synchronous tools with all git off-loop via `run_git`.
@@ -786,10 +905,10 @@ all pinned, each with good/anti-pattern examples that reviewers can reject again
 
 - **Critical Gaps:** none. No missing decision blocks implementation.
 - **Important Gaps:** none.
-- **Minor Gaps:** The tool surface is described as "~7 tools" but only 6 are enumerated
-  (`create_worktree`, `list_worktrees`, `remove_worktree`, `register_task`, `update_task`,
-  `list_tasks`). Either name the 7th tool or change the count to "6". Traceability-only,
-  non-blocking — the `stop`/`--release-lock` capability is a CLI command, not an MCP tool.
+- **Minor Gaps `[RESOLVED 2026-06-22 by amendment]`:** the earlier "~7 vs 6 tools" wording nit is
+  moot — the amended surface is **exactly 5** task-centric tools (`create_task`, `list_worktrees`,
+  `remove_worktree`, `update_task`, `list_tasks`); `stop`/`--release-lock` remains a CLI command, not
+  an MCP tool.
 
 ### Validation Issues Addressed
 
@@ -846,7 +965,9 @@ a structure that mechanically enforces the load-bearing boundaries.
 **Areas for Future Enhancement:**
 - SSE server-push (polling in v1).
 - Branch-rename orphan safety net (accepted as a detectable orphan in v1).
-- Multi-repo support.
+- `[AMENDED 2026-06-22]` ~~Multi-repo support.~~ **Now in v1** (global server, multi-repo tasks).
+  Future here instead: per-repo base-ref overrides on `create_task`, and `add_worktree` to attach a
+  repo to an existing task incrementally.
 - SQLite migration *runner* (version-check only in v1).
 - CI pipeline (enforced pre-commit hook in v1).
 

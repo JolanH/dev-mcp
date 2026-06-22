@@ -1,0 +1,112 @@
+<title>dev-helper-mcp dashboard — key screen (modern console, compact)</title>
+<style>
+  :root{ color-scheme:dark;
+    --bg:#0e1117; --card:#161b22; --border:#21262d;
+    --txt:#e6edf3; --mut:#8b949e; --dim:#586069;
+    --run:#39d0a8; --run-bd:#1f3f37;
+    --blk:#e3a34a; --blk-bg:#2a2113; --blk-bd:#3d3320;
+    --rev:#6cb6ff; --rev-bg:#16263d; --rev-bd:#1f3a5c;
+    --done:#7d8590;
+    --mono:ui-monospace,"SF Mono",Menlo,monospace;
+  }
+  .pg{ background:var(--bg); color:var(--txt); font-family:ui-sans-serif,system-ui,sans-serif;
+       padding:16px 18px 26px; max-width:1000px; margin:0 auto; }
+  .cap{ font-size:12px; color:var(--dim); margin:0 0 14px; line-height:1.55;}
+  .cap b{ color:var(--mut);}
+
+  /* top summary bar */
+  .summary{ display:flex; align-items:center; gap:8px; margin-bottom:16px; flex-wrap:wrap;}
+  .pill{ display:inline-flex; align-items:center; gap:6px; font-size:12px; font-weight:600;
+         padding:4px 11px; border-radius:999px; border:1px solid var(--border); background:var(--card);}
+  .pill .g{ font-size:10px; line-height:1;}
+  .pill.run{ color:var(--run); border-color:var(--run-bd);}
+  .pill.blk{ color:var(--blk); border-color:var(--blk-bd); font-weight:700;}
+  .pill.rev{ color:var(--rev); border-color:var(--rev-bd);}
+  .pill.done{ color:var(--done);}
+  .fresh{ margin-left:auto; font-size:11.5px; color:var(--dim);}
+
+  /* three active columns */
+  .cols{ display:grid; grid-template-columns:repeat(3,1fr); gap:10px; align-items:start;}
+  .col-h{ font-size:11.5px; font-weight:700; letter-spacing:.05em; text-transform:uppercase;
+          color:var(--mut); margin:0 2px 9px; display:flex; align-items:center; gap:6px;}
+  .col-h .n{ color:var(--dim); font-weight:600;}
+  .col-run .col-h{ color:var(--run);} .col-blk .col-h{ color:var(--blk);} .col-rev .col-h{ color:var(--rev);}
+
+  /* cards — compact, status-colored left bar, per-card glyph */
+  .card{ position:relative; overflow:hidden; background:var(--card); border:1px solid var(--border);
+         border-radius:8px; padding:9px 11px 9px 14px; margin-bottom:8px; box-shadow:0 1px 2px rgba(0,0,0,.3);}
+  .card::before{ content:""; position:absolute; left:0; top:0; bottom:0; width:3px; background:var(--done);}
+  .card.run::before{ background:var(--run);} .card.blk::before{ background:var(--blk);} .card.rev::before{ background:var(--rev);}
+  /* EMPHASIS: blocked is the alarm — lifted + glow; running is the calm flat baseline */
+  .card.blk{ box-shadow:0 0 0 1px var(--blk-bd), 0 2px 12px rgba(227,163,74,.14); border-color:var(--blk-bd);}
+  .card.run{ /* flat, calm baseline — no lift */ }
+  .t{ display:flex; align-items:center; gap:7px; font-size:13px; font-weight:650; color:var(--txt);}
+  .t .g{ font-size:11px; line-height:1; flex:none;}      /* per-card glyph = non-color channel */
+  .run .t .g{ color:var(--run);} .blk .t .g{ color:var(--blk);} .rev .t .g{ color:var(--rev);} .done .t .g{ color:var(--done);}
+  .badge{ margin-left:auto; font-size:10.5px; font-weight:600; padding:2px 7px; border-radius:5px;}
+  .badge.b{ color:var(--blk); background:var(--blk-bg);}
+  .badge.r{ color:var(--rev); background:var(--rev-bg);}
+  .wt{ font-family:var(--mono); font-size:11.5px; color:var(--mut); line-height:1.55; padding:4px 0 0 14px;}
+  .wt .repo{ color:#c9d1d9;}
+
+  /* folded sections below the board: Done, then Orphans */
+  .fold{ margin-top:14px; border-top:1px solid var(--border); padding-top:11px;}
+  .fold summary{ font-size:11.5px; color:var(--dim); cursor:pointer; list-style:none;}
+  .fold summary::before{ content:"▸ "; } .fold[open] summary::before{ content:"▾ "; }
+  .fold.done summary{ color:var(--done);}
+  .fold .body{ margin-top:9px;}
+  .fold .o{ font-size:11.5px; color:#6e7681; padding-left:16px; font-family:var(--mono); line-height:1.6;}
+  .fold .o b{ color:#8b949e;}
+  .donecard{ opacity:.55; padding-left:16px; font-size:12px; color:var(--mut); line-height:1.7;}
+  .donecard .g{ color:var(--done); font-size:11px;} .donecard b{ color:#c9d1d9; font-weight:600;}
+</style>
+
+<div class="pg">
+  <p class="cap"><b>Committed direction — "Modern console, compact."</b> Three active columns; <b style="color:var(--blk)">Blocked is the alarm</b> (lifted + glow — an idle agent needs you); Running is the calm flat baseline; Review (blue) waits. <b>Done</b> is a folded count (unfold to see it); orphans folded below. No motion. Status is per-card glyph (●/▲/◆/✓) + colored left bar + column — never color alone. Review = <b>awaiting your review</b> (not "merge").</p>
+
+  <div class="summary">
+    <span class="pill run"><span class="g">●</span>3 running</span>
+    <span class="pill blk"><span class="g">▲</span>1 blocked</span>
+    <span class="pill rev"><span class="g">◆</span>1 review</span>
+    <span class="pill done"><span class="g">✓</span>3 done</span>
+    <span class="fresh">5 repos · updated 1s ago</span>
+  </div>
+
+  <div class="cols">
+    <div class="col col-run">
+      <div class="col-h">● Running <span class="n">3</span></div>
+      <div class="card run"><div class="t"><span class="g">●</span>api-refactor</div>
+        <div class="wt"><span class="repo">repoA</span> · agent/api-refactor</div>
+        <div class="wt"><span class="repo">repoB</span> · agent/api-refactor</div></div>
+      <div class="card run"><div class="t"><span class="g">●</span>ui-polling</div>
+        <div class="wt"><span class="repo">repoA</span> · agent/ui-polling</div></div>
+      <div class="card run"><div class="t"><span class="g">●</span>telemetry-spike</div>
+        <div class="wt"><span class="repo">repoD</span> · agent/telemetry-spike</div></div>
+    </div>
+
+    <div class="col col-blk">
+      <div class="col-h">▲ Blocked <span class="n">1</span></div>
+      <div class="card blk"><div class="t"><span class="g">▲</span>db-migration<span class="badge b">needs input</span></div>
+        <div class="wt"><span class="repo">repoB</span> · agent/db-migration</div></div>
+    </div>
+
+    <div class="col col-rev">
+      <div class="col-h">◆ Review <span class="n">1</span></div>
+      <div class="card rev"><div class="t"><span class="g">◆</span>payments-api<span class="badge r">awaiting review</span></div>
+        <div class="wt"><span class="repo">repoA</span> · agent/payments-api</div>
+        <div class="wt"><span class="repo">repoC</span> · agent/payments-api</div></div>
+    </div>
+  </div>
+
+  <details class="fold done"><summary>✓ 3 done</summary>
+    <div class="body">
+      <div class="donecard"><span class="g">✓</span> <b>auth-docs</b> · repoC · agent/auth-docs</div>
+      <div class="donecard"><span class="g">✓</span> <b>lint-cleanup</b> · repoA · agent/lint-cleanup</div>
+      <div class="donecard"><span class="g">✓</span> <b>readme-pass</b> · repoD · agent/readme-pass</div>
+    </div>
+  </details>
+
+  <details class="fold"><summary>1 orphaned annotation</summary>
+    <div class="body"><div class="o"><b>agent/old-spike</b> — branch gone from git, note preserved here</div></div>
+  </details>
+</div>
