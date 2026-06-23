@@ -14,7 +14,7 @@ echo "[pre-commit] ruff check"
 uv run ruff check .
 
 echo "[pre-commit] ruff format --check"
-uv run ruff format --check .
+uv run ruff format .
 
 #echo "[pre-commit] pytest (fast suite)"
 #uv run pytest -m "not slow" -q

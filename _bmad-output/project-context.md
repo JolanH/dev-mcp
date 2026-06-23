@@ -1,11 +1,11 @@
 ---
 project_name: 'dev-helper-mcp'
 user_name: 'Dev'
-date: '2026-06-22'
-sections_completed: ['technology_stack', 'language_rules', 'framework_rules', 'testing_rules', 'quality_rules', 'workflow_rules', 'anti_patterns']
+date: '2026-06-23'
+sections_completed: ['technology_stack', 'language_rules', 'framework_rules', 'testing_rules', 'test_git_safety', 'quality_rules', 'workflow_rules', 'anti_patterns']
 existing_patterns_found: 17
 status: 'complete'
-rule_count: 44
+rule_count: 49
 optimized_for_llm: true
 ---
 
@@ -75,6 +75,13 @@ _This file contains critical rules and patterns that AI agents must follow when 
 - **In-process base URL must be `http://127.0.0.1:<port>`** (not httpx's default `testserver`), or FastMCP's own host validation returns **421 Misdirected Request**.
 - A FastMCP tool returning a plain `dict` serializes as **JSON text content** (`content[0].text`); `structuredContent` stays `None` — assert by parsing the text.
 
+### Git safety in tests — NEVER touch the project's own repository (HARD RULE)
+- **This tool spawns real git that creates branches and worktrees. A test that runs any git operation against a path resolving to this working tree mutates *this* repo — that is how `master` was once destroyed. It must never happen again.**
+- **Every git operation in a test targets a throwaway repo under `tmp_path` — never the project repo.** Use the **`tmp_git_repo` fixture** (the sanctioned "empty sub-git repo": `git init` in `tmp_path`, one commit). All `run_git()` / `create_task` / `remove_worktree` / raw-`subprocess` git calls in tests pass that tmp path explicitly (`-C <tmp_repo>` or `repo_path=<tmp_repo>`). A git call with **no explicit repo path is forbidden in tests** — it would default to CWD = the project repo.
+- **Always strip inherited `GIT_*` env in test git scaffolding.** When pytest runs inside the pre-commit hook, git exports `GIT_DIR` / `GIT_WORK_TREE` / `GIT_INDEX_FILE` into the process; left in place they redirect *tmp-repo* git calls at the **outer (project) repo** — the test passes in a bare shell but corrupts the real repo under the hook. `tmp_git_repo` already does this (`{k:v … if not k.startswith("GIT_")}`); any new git-spawning fixture/test MUST replicate it.
+- **No test ever runs `git checkout` / `switch` / `branch` / `reset` / `commit` / `worktree` against the current project, mocked or not.** If a test needs branch/worktree context, initialize a fresh empty sub-repo under `tmp_path`; tearing it down is just deleting the tmp dir. The main repository is read-only to the entire test suite.
+- **The real-port `slow` smoke test is also bound by this** — it must not invoke any tool (`create_task` et al.) against a real-world repo path; only against a `tmp_path` repo.
+
 ### Code-quality gate & workflow
 - **Enforced pre-commit gate** (no CI in v1): `ruff check` + `ruff format --check` + `pytest -m "not slow"`. Hook at **`.githooks/pre-commit`**, wired via **`git config core.hooksPath .githooks`** (survives the `agent/<task>` worktrees this tool creates, which share one `.git`). Any failure blocks the commit.
 - **Ruff is scoped to our code:** `extend-exclude = [".claude", "_bmad", "_bmad-output", "docs"]` so vendored BMad/skill scripts don't fail the gate. Run gate-equivalent locally with the hook or `uv run ruff check . && uv run ruff format --check . && uv run pytest -m "not slow"`.
@@ -89,6 +96,7 @@ _This file contains critical rules and patterns that AI agents must follow when 
 - Persisting derived state, or shelling out to git on the `/state` poll path.
 - Hardcoding `8765` in the Origin allowlist; binding `0.0.0.0`.
 - A destructive git op (`worktree remove --force`, `branch -D`) on the read/refresh path.
+- **Any test running git against the project's own repo** — a git call in a test with no explicit `tmp_path` repo target, a fixture that spawns git without stripping `GIT_*` env, or invoking a tool against a real-world repo path. Tests use a throwaway sub-repo only; the main repository is read-only to the suite.
 
 ---
 
@@ -107,5 +115,5 @@ _This file contains critical rules and patterns that AI agents must follow when 
 - Update when the technology stack or a binding pattern changes (e.g. the `mcp` v2 migration).
 - Review periodically for outdated rules.
 
-Last Updated: 2026-06-22
+Last Updated: 2026-06-23
 

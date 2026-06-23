@@ -5,11 +5,13 @@ Async tests are driven with ``asyncio.run`` (no pytest-asyncio); a fresh
 """
 
 import asyncio
+import sys
 from pathlib import Path
 
 import pytest
 
 from dev_helper_mcp.errors import GitTimeout, Internal, NotAGitRepo
+from dev_helper_mcp.git import runner as runner_mod
 from dev_helper_mcp.git.runner import GitResult, GitRunner, Pool
 
 
@@ -63,10 +65,27 @@ def test_nonzero_exit_is_returned_not_raised(tmp_git_repo):
     assert result.stderr  # git wrote a fatal message
 
 
-def test_timeout_raises_kills_and_releases_slot(tmp_git_repo):
+def test_timeout_raises_kills_and_releases_slot(tmp_git_repo, monkeypatch):
+    # Deterministic timeout: swap the spawned process for one that blocks far
+    # longer than the command timeout, so communicate() ALWAYS exceeds it (no
+    # wall-clock race on how fast `git rev-parse` happens to return). The real
+    # _exec path still runs — including kill() + wait() reaping a live child.
+    real_exec = asyncio.create_subprocess_exec
+
+    async def blocking_exec(*_args, **kwargs):
+        # Ignore the git argv; spawn a long sleep with _exec's own pipe wiring.
+        return await real_exec(
+            sys.executable,
+            "-c",
+            "import time; time.sleep(30)",
+            stdout=kwargs.get("stdout"),
+            stderr=kwargs.get("stderr"),
+        )
+
+    monkeypatch.setattr(runner_mod.asyncio, "create_subprocess_exec", blocking_exec)
+
     async def main():
-        # Tiny command timeout forces the timeout path deterministically.
-        runner = GitRunner(read_pool_size=2, read_timeout=0.001)
+        runner = GitRunner(read_pool_size=2, read_timeout=0.05)
         with pytest.raises(GitTimeout):
             await runner.run_git(str(tmp_git_repo), ["rev-parse", "HEAD"], pool=Pool.READ)
         # Slot released in the finally (no leak / deadlock): value back to full.

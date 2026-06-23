@@ -11,12 +11,78 @@ is ``slow``-marked.
 
 import os
 import subprocess
+from pathlib import Path
 
 import httpx
 import pytest
 
 from dev_helper_mcp.config import DEFAULT_PORT
 from dev_helper_mcp.server_factory import create_app
+
+# ── Git-safety guard (project-context.md "Git safety in tests") ──
+# The suite treats THIS project's own repository as strictly read-only. A test
+# that runs git against a path resolving to this working tree once altered branch
+# `master` and lost code; that must never recur. tests/ lives directly under the
+# project root, so parent.parent is the repo root.
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+# GIT_*-stripped env so the read-only signature below targets the real working
+# tree even when pytest runs inside the pre-commit hook (which exports GIT_DIR /
+# GIT_WORK_TREE / GIT_INDEX_FILE into the process).
+_CLEAN_GIT_ENV = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+_CLEAN_GIT_ENV["GIT_TERMINAL_PROMPT"] = "0"
+
+
+def _project_repo_signature() -> str | None:
+    """Read-only fingerprint of the project repo's refs + HEAD + current branch.
+
+    Returns ``None`` if the project root is not a git repo (e.g. running from an
+    unpacked sdist), making the guard a no-op there. Every git invocation is
+    read-only (``rev-parse`` / ``symbolic-ref`` / ``for-each-ref``).
+    """
+
+    def git(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["git", "-C", str(_PROJECT_ROOT), *args],
+            capture_output=True,
+            text=True,
+            env=_CLEAN_GIT_ENV,
+        )
+
+    inside = git("rev-parse", "--is-inside-work-tree")
+    if inside.returncode != 0 or inside.stdout.strip() != "true":
+        return None
+    head = git("rev-parse", "HEAD").stdout.strip()
+    branch = git("symbolic-ref", "--quiet", "HEAD").stdout.strip()  # "" if detached
+    refs = git("for-each-ref", "--format=%(refname) %(objectname)").stdout
+    return f"HEAD={head}\nBRANCH={branch}\nREFS=\n{refs}"
+
+
+@pytest.fixture(scope="session")
+def _project_repo_baseline() -> str | None:
+    return _project_repo_signature()
+
+
+@pytest.fixture(autouse=True)
+def _guard_project_repo_untouched(_project_repo_baseline):
+    """HARD GUARD: no test may mutate the project's own git repository.
+
+    Regression guard for the incident where a test run altered branch ``master``.
+    Every test's git work must target a throwaway repo under ``tmp_path`` (the
+    ``tmp_git_repo`` fixture), never this repo. Asserts the repo's refs/HEAD are
+    byte-identical after each test, pinpointing the first offender.
+    """
+    yield
+    if _project_repo_baseline is None:
+        return
+    after = _project_repo_signature()
+    assert after == _project_repo_baseline, (
+        "A test mutated the PROJECT's own git repository (refs/HEAD changed). "
+        "Tests must run git only against a tmp_path repo (see the tmp_git_repo "
+        "fixture); the main repository is read-only to the suite. "
+        "See project-context.md 'Git safety in tests'."
+    )
+
 
 # Port baked into the app + the Origin allowlist for the in-process tests.
 TEST_PORT = DEFAULT_PORT
