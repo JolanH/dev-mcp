@@ -1,0 +1,20 @@
+# IDE
+*.iml
+.idea/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Virtual env
+.venv/
+
+# Build artifacts
+build/
+dist/
+
+# Worktree siblings created at runtime (state lives in XDG, not the repo)
+*.worktrees/

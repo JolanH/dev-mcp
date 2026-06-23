@@ -1,0 +1,39 @@
+[project]
+name = "dev-helper-mcp"
+version = "0.1.0"
+description = "Global MCP server for agent-driven multi-repo git task self-service"
+readme = "README.md"
+authors = [
+    { name = "Jolan Houvenaeghel", email = "jhouvenaeghel@tixeo.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "aiosqlite>=0.22.1",
+    "mcp>=1.28,<2",
+]
+
+[project.scripts]
+dev-helper-mcp = "dev_helper_mcp.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.9.22,<0.10.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=9.1.1",
+    "ruff>=0.15.18",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+# Lint/format only our own code. Vendored BMad tooling and skill scripts are
+# out of scope for this project's quality gate.
+extend-exclude = [".claude", "_bmad", "_bmad-output", "docs"]
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+]
