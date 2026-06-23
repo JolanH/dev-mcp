@@ -7,9 +7,13 @@ are *injected* — core never constructs the runner/store (testability + the
 ``data`` dict; raises a typed :class:`DevHelperError` on any guard (the adapter
 converts it to the ``{ok, data, error}`` envelope).
 
-Scope (Story 1.3): happy path + preflight rejection only. Every error here is
-raised in **preflight, before any git mutation**, so success and rejection both
-leave the system clean — no compensation. Post-preflight rollback is Story 1.4.
+Scope (Story 1.4): happy path + preflight rejection (1.3) **plus** post-preflight
+cross-repo rollback. A preflight error is still raised before any mutation (cheapest
+rollback — nothing to undo). If a git mutation fails *after* preflight passed, every
+already-created worktree is torn down in **reverse creation order** via the injected
+:class:`RepoMutator`; a clean rollback re-raises the original cause, while a
+compensation that itself fails escalates to ``RollbackIncomplete`` (orphans named,
+original cause preserved). Crash-safety (SIGKILL mid-call) is an explicit v1 non-goal.
 """
 
 from __future__ import annotations
@@ -18,13 +22,15 @@ import os
 from pathlib import Path
 
 from ..config import branch_name_for, worktree_path_for
+from ..core.mutator import GitRepoMutator, RepoMutator
 from ..core.slug import slugify
 from ..errors import (
     ActiveTaskConflict,
     BaseRefNotFound,
     BranchExists,
+    DevHelperError,
     InvalidTaskName,
-    Internal,
+    RollbackIncomplete,
     WorktreePathInUse,
 )
 from ..git.repo_lock import RepoLockRegistry
@@ -44,12 +50,19 @@ async def create(
     runner: GitRunner,
     locks: RepoLockRegistry,
     store: Store,
+    mutator: RepoMutator | None = None,
 ) -> dict:
     """Create the task across every repo in ``repos``; return the success ``data``.
 
     Raises ``InvalidTaskName``/``NotAGitRepo``/``BranchExists``/``WorktreePathInUse``
-    /``BaseRefNotFound``/``ActiveTaskConflict`` in preflight (nothing mutated), or a
-    typed git/``Internal`` error if a mutation fails after preflight.
+    /``BaseRefNotFound``/``ActiveTaskConflict`` in preflight (nothing mutated). If a
+    git mutation fails after preflight, already-created worktrees are torn down in
+    reverse order and the original cause is re-raised — or ``RollbackIncomplete`` if a
+    teardown itself fails (orphaned repos named, original cause preserved).
+
+    ``mutator`` is the injectable create/teardown seam (for deterministic fault
+    injection in tests); when ``None`` it defaults to ``GitRepoMutator(runner)`` so
+    production callers and existing tests need no change.
     """
     slug = slugify(task_name)  # raises InvalidTaskName
     branch = branch_name_for(slug)
@@ -113,40 +126,69 @@ async def create(
 
             plan.append((repo, wt_path))
 
-        # ── Provisioning (AC 1, 2, 3) — preflight passed; create branch+worktree per repo. ──
+        # ── Provisioning + reverse-order compensation (AC 1, 3) — preflight passed. ──
+        # Default the seam to the production mutator (keeps the per-loop "build inside
+        # the running loop" rule — runner is already loop-bound).
+        if mutator is None:
+            mutator = GitRepoMutator(runner)
         start_point = base_ref or "HEAD"
-        worktrees: list[tuple[str, str, str]] = []
-        for repo, wt_path in plan:
-            result = await runner.run_git(
-                repo,
-                ["worktree", "add", "-b", branch, str(wt_path), start_point, "--"],
-                pool=Pool.MUTATION,
-            )
-            if result.returncode != 0:
-                # Post-preflight failure (race/disk). Surface it typed; full
-                # reverse-order compensation is Story 1.4, not this story.
-                raise Internal(
-                    "git worktree add failed",
-                    {
-                        "repo": repo,
-                        "branch": branch,
-                        "stderr": result.stderr.decode(errors="replace").strip(),
-                    },
-                )
-            worktrees.append((repo, branch, str(wt_path)))
+        provisioned: list[tuple[str, str, str]] = []
+        try:
+            for repo, wt_path in plan:
+                await mutator.add(repo, branch, str(wt_path), start_point)
+                # Append ONLY after `add` returns: the failing repo must NOT be in
+                # `provisioned`, or compensation would try to tear down a worktree
+                # that was never created (spurious teardown failure).
+                provisioned.append((repo, branch, str(wt_path)))
 
-        # ── Persist last, in one transaction (AC 2). ──
-        ts = now_iso()
-        # Retask of a done slug preserves the original created_at; new slug → now.
-        created_at = existing["created_at"] if existing is not None else ts
-        await store.persist_created_task(
-            task_id=slug,
-            description=description,
-            status=_RUNNING,
-            created_at=created_at,
-            updated_at=ts,
-            worktrees=worktrees,
-        )
+            # Past the loop ⇒ every `add` succeeded; `provisioned` is the full set.
+            worktrees = provisioned
+
+            # ── Persist last, in one transaction (AC 2). ──
+            # Kept INSIDE the try on purpose: a persist failure (a TOCTOU
+            # ``ActiveTaskConflict`` slipping past the preflight gate, or a disk-full /
+            # db-locked ``Internal``) must trigger the SAME reverse-order compensation.
+            # Until the rows commit, the worktrees we just created are uncommitted
+            # residue — leaving them on a persist failure would orphan worktrees +
+            # branches with no DB row, defeating the all-or-nothing guarantee (AR-13).
+            ts = now_iso()
+            # Retask of a done slug preserves the original created_at; new slug → now.
+            created_at = existing["created_at"] if existing is not None else ts
+            await store.persist_created_task(
+                task_id=slug,
+                description=description,
+                status=_RUNNING,
+                created_at=created_at,
+                updated_at=ts,
+                worktrees=worktrees,
+            )
+        except DevHelperError as cause:
+            # Tear down in reverse creation order ([A,B,C] failing at C → B then A).
+            # Triggered by either a post-preflight ``add`` failure (the failing repo is
+            # NOT in ``provisioned``) or a persist failure (``provisioned`` is the full
+            # set, all worktrees torn down). Locks are still held (this is inside the
+            # outer try; ``finally`` releases them only after rollback) so no concurrent
+            # create sees a half-torn repo.
+            orphaned_repos: list[str] = []
+            compensation_errors: list[dict] = []
+            for repo, br, wt in reversed(provisioned):
+                try:
+                    await mutator.remove(repo, br, wt)
+                except DevHelperError as comp_exc:
+                    orphaned_repos.append(repo)
+                    compensation_errors.append({"repo": repo, "error": comp_exc.as_dict()})
+            if orphaned_repos:
+                # A compensation itself failed — escalate, but NEVER swallow `cause`.
+                raise RollbackIncomplete(
+                    "compensating teardown failed",
+                    {
+                        "orphaned_repos": orphaned_repos,
+                        "original_cause": cause.as_dict(),
+                        "compensation_errors": compensation_errors,
+                    },
+                ) from cause
+            # Clean rollback: no rows written, no residue → re-raise the real cause.
+            raise
 
         return {
             "task_id": slug,

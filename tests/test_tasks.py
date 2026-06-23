@@ -8,17 +8,21 @@ and a tmp-file ``Store`` (no server, no port). Async is driven with ``asyncio.ru
 import asyncio
 import os
 import subprocess
+from pathlib import Path
 
 import pytest
 
 from dev_helper_mcp.config import branch_name_for, worktree_path_for
 from dev_helper_mcp.core import tasks
+from dev_helper_mcp.core.mutator import GitRepoMutator, _classify_add_failure
 from dev_helper_mcp.errors import (
     ActiveTaskConflict,
     BaseRefNotFound,
     BranchExists,
+    Internal,
     InvalidTaskName,
     NotAGitRepo,
+    RollbackIncomplete,
     WorktreePathInUse,
 )
 from dev_helper_mcp.git.repo_lock import RepoLockRegistry
@@ -435,3 +439,419 @@ def test_empty_repos_rejected(tmp_path):
 
 def test_branch_name_helper():
     assert branch_name_for("foo") == "agent/foo"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Story 1.4 — cross-repo rollback (error-safe). Post-preflight `add` failures must
+# tear down already-created worktrees in reverse order; a teardown that itself
+# fails escalates to RollbackIncomplete. The RepoMutator seam makes the partial-
+# failure matrix deterministic via in-process fault injection (no git corruption).
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def _canonical(repos) -> list[str]:
+    """The sorted-abspath order the orchestrator locks/provisions on — the key the
+    mutator sees as ``repo`` and the order compensation reverses."""
+    return sorted(os.path.abspath(str(r)) for r in repos)
+
+
+class FlakyMutator:
+    """Wraps a real ``GitRepoMutator`` so non-targeted repos do REAL git (real
+    worktrees/branches created and torn down → filesystem-assertable), while the
+    targeted ``(repo, phase)`` raises a synthetic typed error in-process — never
+    corrupting git state (project-context "Git safety in tests"). Keyed by absolute
+    repo path to match the orchestrator's canonical order. Records call order so the
+    reverse-teardown order is assertable."""
+
+    def __init__(self, inner, *, fail_add_on: str | None = None, fail_remove_on: str | None = None):
+        self._inner = inner
+        self._fail_add_on = fail_add_on
+        self._fail_remove_on = fail_remove_on
+        self.add_calls: list[str] = []
+        self.remove_calls: list[str] = []
+
+    async def add(self, repo, branch, worktree_path, start_point) -> None:
+        self.add_calls.append(repo)
+        if self._fail_add_on is not None and repo == self._fail_add_on:
+            # Synthetic post-preflight failure (a race surfacing as BranchExists).
+            raise BranchExists("injected add failure", {"repo": repo, "branch": branch})
+        await self._inner.add(repo, branch, worktree_path, start_point)
+
+    async def remove(self, repo, branch, worktree_path) -> None:
+        self.remove_calls.append(repo)
+        if self._fail_remove_on is not None and repo == self._fail_remove_on:
+            # Synthetic teardown failure → this repo stays orphaned (AC-3). The real
+            # worktree/branch are left untouched on disk, exactly like a failed `git
+            # worktree remove` would.
+            raise Internal("injected remove failure", {"repo": repo})
+        await self._inner.remove(repo, branch, worktree_path)
+
+
+class SpyMutator:
+    """Records calls and does nothing else — proves a preflight reject never enters
+    provisioning (AC-2: "never started")."""
+
+    def __init__(self):
+        self.add_calls: list[str] = []
+        self.remove_calls: list[str] = []
+
+    async def add(self, repo, branch, worktree_path, start_point) -> None:
+        self.add_calls.append(repo)
+
+    async def remove(self, repo, branch, worktree_path) -> None:
+        self.remove_calls.append(repo)
+
+
+# ── AC-1 / AC-5: partial-failure matrix — fail add on repo i of N; clean rollback ──
+
+
+@pytest.mark.parametrize("n", [1, 2, 3])
+def test_add_failure_rolls_back_clean(n, tmp_path):
+    """Fail the ``add`` of repo ``i`` (i ∈ {1, 2, N}) of ``N``: every repo ends with
+    zero ``agent/<slug>`` branches, zero worktree dirs, zero DB rows, and teardown
+    runs in reverse creation order. The triggering cause is the error raised."""
+    fail_positions = sorted(p for p in {1, 2, n} if p <= n)  # 1-based, valid for N
+
+    async def run():
+        scenarios = []
+        for pos in fail_positions:
+            base = tmp_path / f"n{n}p{pos}"
+            repos = [base / f"r{i}" for i in range(n)]
+            for r in repos:
+                _init_repo(r)
+            canonical = _canonical(repos)
+            fail_repo = canonical[pos - 1]
+            slug = f"matrix-{n}-{pos}"
+            store = await Store.open(base / "state.db")
+            try:
+                runner = GitRunner()
+                flaky = FlakyMutator(GitRepoMutator(runner), fail_add_on=fail_repo)
+                with pytest.raises(BranchExists):
+                    await tasks.create(
+                        slug,
+                        "x",
+                        [str(r) for r in repos],
+                        runner=runner,
+                        locks=RepoLockRegistry(),
+                        store=store,
+                        mutator=flaky,
+                    )
+                row = await store.get_task(slug)
+            finally:
+                await store.close()
+            scenarios.append((repos, canonical, fail_repo, slug, flaky, row))
+        return scenarios
+
+    for repos, canonical, fail_repo, slug, flaky, row in asyncio.run(run()):
+        # No DB row — the call looks like it never happened.
+        assert row is None, f"{slug}: unexpected task row"
+        # No residue in ANY repo.
+        for r in repos:
+            assert not _branch_exists(r, f"agent/{slug}"), f"{slug}: branch leaked in {r}"
+            assert not os.path.isdir(str(worktree_path_for(r, slug))), f"{slug}: wt leaked in {r}"
+        # Teardown is the reverse of creation order; only repos provisioned BEFORE the
+        # failing one are torn down (the failing repo was never appended).
+        fail_idx = canonical.index(fail_repo)
+        assert flaky.remove_calls == list(reversed(canonical[:fail_idx])), f"{slug}: order"
+
+
+# ── AC-3: compensation itself fails → RollbackIncomplete, original cause preserved ──
+
+
+def test_compensation_failure_raises_rollback_incomplete(tmp_path):
+    """Fail ``add`` at C (so A and B are provisioned) AND fail the ``remove`` of A:
+    rollback removes B (reverse order) then fails on A → RollbackIncomplete naming
+    exactly A as orphaned, the triggering cause preserved, no DB row, B left clean."""
+    repos = [tmp_path / "ra", tmp_path / "rb", tmp_path / "rc"]
+    for r in repos:
+        _init_repo(r)
+    canonical = _canonical(repos)
+    fail_add = canonical[2]  # C — last → A and B get provisioned first
+    fail_remove = canonical[0]  # A — its teardown fails → orphaned
+    torn_down_ok = canonical[1]  # B — torn down successfully before A is attempted
+
+    async def run():
+        store = await Store.open(tmp_path / "state.db")
+        try:
+            runner = GitRunner()
+            flaky = FlakyMutator(
+                GitRepoMutator(runner), fail_add_on=fail_add, fail_remove_on=fail_remove
+            )
+            with pytest.raises(RollbackIncomplete) as ei:
+                await tasks.create(
+                    "rbi",
+                    "x",
+                    [str(r) for r in repos],
+                    runner=runner,
+                    locks=RepoLockRegistry(),
+                    store=store,
+                    mutator=flaky,
+                )
+            row = await store.get_task("rbi")
+            return ei.value, row, flaky
+        finally:
+            await store.close()
+
+    err, row, flaky = asyncio.run(run())
+
+    # No rows persisted even on a failed compensation.
+    assert row is None
+    details = err.details
+    # Exactly the repo whose teardown failed is reported orphaned (snake_case keys).
+    assert details["orphaned_repos"] == [fail_remove]
+    assert torn_down_ok not in details["orphaned_repos"]
+    # The triggering cause is preserved (not swallowed) — both in details and chained.
+    assert details["original_cause"]["code"] == "BranchExists"
+    assert isinstance(err.__cause__, BranchExists)
+    # Reverse-order teardown attempted B then A.
+    assert flaky.remove_calls == [torn_down_ok, fail_remove]
+    # B was really torn down (no residue); A is the genuine orphan (residue remains).
+    assert not _branch_exists(Path(torn_down_ok), "agent/rbi")
+    assert not os.path.isdir(str(worktree_path_for(Path(torn_down_ok), "rbi")))
+    assert _branch_exists(Path(fail_remove), "agent/rbi")
+    assert os.path.isdir(str(worktree_path_for(Path(fail_remove), "rbi")))
+
+
+# ── AC-4: a clean rollback leaves no residue — same-name retry succeeds ──
+
+
+def test_clean_rollback_allows_retry(tmp_path):
+    repos = [tmp_path / "a", tmp_path / "b"]
+    for r in repos:
+        _init_repo(r)
+    canonical = _canonical(repos)
+
+    async def run():
+        store = await Store.open(tmp_path / "state.db")
+        try:
+            runner = GitRunner()
+            locks = RepoLockRegistry()
+            # First attempt rolls back cleanly (fail add on the 2nd-provisioned repo).
+            flaky = FlakyMutator(GitRepoMutator(runner), fail_add_on=canonical[1])
+            with pytest.raises(BranchExists):
+                await tasks.create(
+                    "retry",
+                    "first",
+                    [str(r) for r in repos],
+                    runner=runner,
+                    locks=locks,
+                    store=store,
+                    mutator=flaky,
+                )
+            # Retry with the same name + repos using the REAL (default) mutator.
+            data = await tasks.create(
+                "retry",
+                "second",
+                [str(r) for r in repos],
+                runner=runner,
+                locks=locks,
+                store=store,
+            )
+            return data, await store.get_task("retry"), await store.count_worktrees("retry")
+        finally:
+            await store.close()
+
+    data, row, n_wt = asyncio.run(run())
+    assert len(data["worktrees"]) == 2
+    assert row is not None and row["status"] == "running"
+    assert row["description"] == "second"
+    assert n_wt == 2
+    for r in repos:
+        assert _branch_exists(r, "agent/retry")
+        assert os.path.isdir(str(worktree_path_for(r, "retry")))
+
+
+# ── AC-2 preserved: a preflight reject never enters provisioning (never started) ──
+
+
+def test_preflight_reject_never_calls_mutator(tmp_path):
+    repos = [tmp_path / "a", tmp_path / "b"]
+    for r in repos:
+        _init_repo(r)
+    # Pre-create the colliding branch in the SECOND repo so preflight rejects.
+    _git(repos[1], "branch", "agent/dup")
+
+    async def run():
+        store = await Store.open(tmp_path / "state.db")
+        try:
+            spy = SpyMutator()
+            with pytest.raises(BranchExists):
+                await tasks.create(
+                    "dup",
+                    "x",
+                    [str(r) for r in repos],
+                    runner=GitRunner(),
+                    locks=RepoLockRegistry(),
+                    store=store,
+                    mutator=spy,
+                )
+            return spy, await store.get_task("dup")
+        finally:
+            await store.close()
+
+    spy, row = asyncio.run(run())
+    # The mutator was never touched — provisioning never started; no rows.
+    assert spy.add_calls == []
+    assert spy.remove_calls == []
+    assert row is None
+
+
+# ── Task 4: GitRepoMutator typed classification of a REAL `git worktree add` failure ──
+
+
+def test_git_mutator_add_classifies_branch_exists(tmp_git_repo):
+    # Pre-create the branch so a real `worktree add -b` fails on the branch.
+    _git(tmp_git_repo, "branch", "agent/clash")
+
+    async def run():
+        m = GitRepoMutator(GitRunner())
+        with pytest.raises(BranchExists):
+            await m.add(
+                os.path.abspath(str(tmp_git_repo)),
+                "agent/clash",
+                str(worktree_path_for(tmp_git_repo, "clash")),
+                "HEAD",
+            )
+
+    asyncio.run(run())
+
+
+def test_git_mutator_add_classifies_path_in_use(tmp_git_repo):
+    # Pre-create a non-empty target dir so a real `worktree add` fails on the path.
+    wt = worktree_path_for(tmp_git_repo, "occ")
+    wt.mkdir(parents=True)
+    (wt / "f.txt").write_text("x\n")
+
+    async def run():
+        m = GitRepoMutator(GitRunner())
+        with pytest.raises(WorktreePathInUse):
+            await m.add(
+                os.path.abspath(str(tmp_git_repo)),
+                "agent/occ",
+                str(wt),
+                "HEAD",
+            )
+
+    asyncio.run(run())
+
+
+def test_git_mutator_remove_raises_on_worktree_failure(tmp_git_repo):
+    # No such worktree → real `git worktree remove` returns non-zero → typed Internal
+    # naming the FIRST teardown step (worktree remove). This is how the orchestrator
+    # detects a failed teardown (AC-3); assert the specific op so a regression that
+    # swaps/loses the worktree-remove path is caught (not just "some Internal").
+    async def run():
+        m = GitRepoMutator(GitRunner())
+        with pytest.raises(Internal) as ei:
+            await m.remove(
+                os.path.abspath(str(tmp_git_repo)),
+                "agent/nope",
+                str(worktree_path_for(tmp_git_repo, "nope")),
+            )
+        return ei.value
+
+    err = asyncio.run(run())
+    assert "git worktree remove failed" in err.message
+    assert err.details["worktree_path"].endswith("nope")
+
+
+def test_git_mutator_remove_raises_on_branch_failure(tmp_git_repo):
+    # Worktree removal succeeds but `branch -D` fails (the branch does not exist) →
+    # Internal naming the SECOND teardown step. Proves the two failure paths are
+    # distinct and not swapped, and that the worktree was really removed first.
+    wt = worktree_path_for(tmp_git_repo, "real")
+    _git(tmp_git_repo, "worktree", "add", "-b", "agent/real", str(wt), "HEAD", "--")
+
+    async def run():
+        m = GitRepoMutator(GitRunner())
+        with pytest.raises(Internal) as ei:
+            # Correct worktree path (removes cleanly) but a branch that doesn't exist.
+            await m.remove(
+                os.path.abspath(str(tmp_git_repo)),
+                "agent/does-not-exist",
+                str(wt),
+            )
+        return ei.value
+
+    err = asyncio.run(run())
+    assert "git branch -D failed" in err.message
+    assert err.details["branch"] == "agent/does-not-exist"
+    # The worktree WAS removed (first step succeeded before the branch step failed).
+    assert not os.path.isdir(str(wt))
+
+
+# ── Task 4 (review): _classify_add_failure precedence + Internal fallback, unit-level ──
+
+
+def test_classify_add_failure_precedence_and_fallback():
+    """Direct unit test of the stderr classifier — the most regression-prone logic
+    (substring matching, branch-before-path precedence, Internal fallback). The
+    branch-collision message contains BOTH "a branch named" AND "already exists";
+    branch precedence must win so it maps to BranchExists, not WorktreePathInUse."""
+    branch_err = _classify_add_failure(
+        "/r", "agent/x", "/wt", b"fatal: a branch named 'agent/x' already exists"
+    )
+    assert isinstance(branch_err, BranchExists)
+
+    checked_out = _classify_add_failure(
+        "/r", "agent/x", "/wt", b"fatal: 'agent/x' is already checked out at '/other'"
+    )
+    assert isinstance(checked_out, BranchExists)
+
+    path_err = _classify_add_failure("/r", "agent/x", "/wt", b"fatal: '/wt' already exists")
+    assert isinstance(path_err, WorktreePathInUse)
+
+    # Unrecognized (or locale-translated) stderr → Internal carrying trimmed stderr.
+    fallback = _classify_add_failure("/r", "agent/x", "/wt", b"  fatal: some other error\n")
+    assert isinstance(fallback, Internal)
+    assert fallback.details["stderr"] == "fatal: some other error"
+
+
+# ── Review patch: a persist failure AFTER full provisioning must also roll back ──
+
+
+def test_persist_failure_rolls_back_worktrees(tmp_path):
+    """The persist call lives inside the compensation try: if it fails after every
+    worktree is provisioned (e.g. a TOCTOU ActiveTaskConflict), all worktrees +
+    branches are torn down in reverse order, no rows persist, and the original
+    persist cause surfaces — the all-or-nothing guarantee holds for the persist
+    window too, not just `add` failures."""
+    repos = [tmp_path / "a", tmp_path / "b"]
+    for r in repos:
+        _init_repo(r)
+    canonical = _canonical(repos)
+
+    async def run():
+        store = await Store.open(tmp_path / "state.db")
+        try:
+            runner = GitRunner()
+            # Real adds + real removes (no injected mutator fault) — only persist fails.
+            flaky = FlakyMutator(GitRepoMutator(runner))
+
+            async def boom(**kwargs):
+                raise ActiveTaskConflict("injected persist failure", {"task_id": kwargs["task_id"]})
+
+            store.persist_created_task = boom
+            with pytest.raises(ActiveTaskConflict):
+                await tasks.create(
+                    "persistfail",
+                    "x",
+                    [str(r) for r in repos],
+                    runner=runner,
+                    locks=RepoLockRegistry(),
+                    store=store,
+                    mutator=flaky,
+                )
+            row = await store.get_task("persistfail")
+            return row, flaky
+        finally:
+            await store.close()
+
+    row, flaky = asyncio.run(run())
+    # No rows — the call looks like it never happened.
+    assert row is None
+    # Every provisioned worktree was torn down, in reverse creation order.
+    assert flaky.remove_calls == list(reversed(canonical))
+    for r in repos:
+        assert not _branch_exists(r, "agent/persistfail")
+        assert not os.path.isdir(str(worktree_path_for(r, "persistfail")))
