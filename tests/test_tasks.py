@@ -20,9 +20,11 @@ from dev_helper_mcp.errors import (
     BaseRefNotFound,
     BranchExists,
     Internal,
+    InvalidStatus,
     InvalidTaskName,
     NotAGitRepo,
     RollbackIncomplete,
+    TaskNotFound,
     WorktreePathInUse,
 )
 from dev_helper_mcp.git.repo_lock import RepoLockRegistry
@@ -855,3 +857,268 @@ def test_persist_failure_rolls_back_worktrees(tmp_path):
     for r in repos:
         assert not _branch_exists(r, "agent/persistfail")
         assert not os.path.isdir(str(worktree_path_for(r, "persistfail")))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Story 1.6 — update_task (status lifecycle + 4×4 transition matrix) and list_tasks.
+# Pure status logic seeds task rows directly via the Store (git-free); only the AC4
+# slug-reuse regressions and list_tasks multi-repo fixtures spawn real git
+# (tmp_git_repo/_init_repo), per the git-safety rule.
+# ══════════════════════════════════════════════════════════════════════════════
+
+_TS = "2026-06-22T10:00:00Z"
+_ALL_STATUSES = ("running", "blocked", "review", "done")
+
+
+def test_update_task_status_and_description(tmp_path):
+    """AC1: status+description updated, updated_at bumped, created_at preserved."""
+
+    async def run():
+        store = await _make_store(tmp_path)
+        try:
+            await store.add_task("t1", "first", "running", _TS, _TS)
+            data = await tasks.update_task("t1", status="review", description="second", store=store)
+            return data, await store.get_task("t1")
+        finally:
+            await store.close()
+
+    data, row = asyncio.run(run())
+    assert data["task_id"] == "t1"
+    assert data["status"] == "review"
+    assert data["description"] == "second"
+    assert data["created_at"] == _TS
+    assert data["updated_at"] > _TS  # advanced (now_iso() is "today")
+    # Persisted exactly as returned; created_at untouched.
+    assert row["status"] == "review"
+    assert row["description"] == "second"
+    assert row["created_at"] == _TS
+    assert row["updated_at"] == data["updated_at"]
+
+
+def test_update_task_out_of_set_status_rejected(tmp_path):
+    """AC1: a status outside the four-state set → InvalidStatus(reason=not_in_set), no change."""
+
+    async def run():
+        store = await _make_store(tmp_path)
+        try:
+            await store.add_task("t1", "d", "running", _TS, _TS)
+            with pytest.raises(InvalidStatus) as ei:
+                await tasks.update_task("t1", status="merged", store=store)
+            return ei.value, await store.get_task("t1")
+        finally:
+            await store.close()
+
+    err, row = asyncio.run(run())
+    assert err.details["reason"] == "not_in_set"
+    assert row["status"] == "running"  # unchanged
+    assert row["updated_at"] == _TS  # not bumped
+
+
+def test_update_task_unknown_task_not_found(tmp_path):
+    """AC3: a non-existent task_id → TaskNotFound."""
+
+    async def run():
+        store = await _make_store(tmp_path)
+        try:
+            with pytest.raises(TaskNotFound):
+                await tasks.update_task("ghost", status="done", store=store)
+        finally:
+            await store.close()
+
+    asyncio.run(run())
+
+
+def test_update_task_noop_returns_unchanged_without_bump(tmp_path):
+    """Review patch: both fields None → return the task unchanged, NO DB write, NO
+    updated_at bump (a no-op must not silently advance the timestamp)."""
+
+    async def run():
+        store = await _make_store(tmp_path)
+        try:
+            await store.add_task("t1", "d", "running", _TS, _TS)
+            data = await tasks.update_task("t1", store=store)
+            return data, await store.get_task("t1")
+        finally:
+            await store.close()
+
+    data, row = asyncio.run(run())
+    assert data["status"] == "running"
+    assert data["description"] == "d"
+    assert data["created_at"] == _TS
+    assert data["updated_at"] == _TS  # not bumped
+    assert row["updated_at"] == _TS  # no DB write happened
+
+
+def test_update_task_phantom_success_guarded(tmp_path):
+    """Review patch: if the row vanishes between the get_task precheck and the write
+    (store.update_task reports no match), core raises TaskNotFound instead of
+    fabricating success from the stale snapshot."""
+
+    async def run():
+        store = await _make_store(tmp_path)
+        try:
+            await store.add_task("t1", "d", "running", _TS, _TS)
+
+            async def no_match(*args, **kwargs):  # simulate the TOCTOU delete
+                return False
+
+            store.update_task = no_match
+            with pytest.raises(TaskNotFound):
+                await tasks.update_task("t1", status="review", store=store)
+        finally:
+            await store.close()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("dst", _ALL_STATUSES)
+@pytest.mark.parametrize("src", _ALL_STATUSES)
+def test_transition_matrix(src, dst, tmp_path):
+    """AC2: the full 4×4 matrix — 12 non-``done``-source pairs pass, the 4 ``done``-source
+    pairs reject with InvalidStatus(reason=illegal_transition). ``done`` is terminal,
+    including ``done → done``. Git-free: the src status is seeded directly via the Store.
+    """
+
+    async def run():
+        store = await _make_store(tmp_path)
+        try:
+            await store.add_task("t", "d", src, _TS, _TS)
+            if src == "done":
+                with pytest.raises(InvalidStatus) as ei:
+                    await tasks.update_task("t", status=dst, store=store)
+                return "reject", ei.value.details["reason"], await store.get_task("t")
+            data = await tasks.update_task("t", status=dst, store=store)
+            return "ok", data, await store.get_task("t")
+        finally:
+            await store.close()
+
+    kind, payload, row = asyncio.run(run())
+    if src == "done":
+        assert kind == "reject"
+        assert payload == "illegal_transition"
+        assert row["status"] == "done"  # terminal — unchanged
+    else:
+        assert kind == "ok"
+        assert payload["status"] == dst
+        assert row["status"] == dst
+
+
+def test_update_task_done_keeps_row_and_links(tmp_git_repo, tmp_path):
+    """AC4: ``done`` sets status ONLY — the task row + its worktree links are NOT deleted
+    (that DELETE is remove_worktree's last-worktree path, a distinct 'closed' semantics)."""
+
+    async def run():
+        store = await _make_store(tmp_path)
+        try:
+            await tasks.create(
+                "keep",
+                "d",
+                [str(tmp_git_repo)],
+                runner=GitRunner(),
+                locks=RepoLockRegistry(),
+                store=store,
+            )
+            await tasks.update_task("keep", status="done", store=store)
+            return await store.get_task("keep"), await store.count_worktrees("keep")
+        finally:
+            await store.close()
+
+    row, n_wt = asyncio.run(run())
+    assert row is not None and row["status"] == "done"
+    assert n_wt == 1  # links preserved on done
+
+
+def test_update_task_done_releases_slug_review_blocks(tmp_git_repo, tmp_path):
+    """AC4 highest-risk seam (epics.md:226): an ACTIVE status (review) blocks re-creating
+    the slug (ActiveTaskConflict), while ``done`` releases it so a new create_task wins."""
+
+    async def run():
+        store = await _make_store(tmp_path)
+        try:
+            runner = GitRunner()
+            locks = RepoLockRegistry()
+            first = await tasks.create(
+                "reuse", "first", [str(tmp_git_repo)], runner=runner, locks=locks, store=store
+            )
+            # review is active → re-creating the slug must reject.
+            await tasks.update_task("reuse", status="review", store=store)
+            with pytest.raises(ActiveTaskConflict):
+                await tasks.create(
+                    "reuse", "again", [str(tmp_git_repo)], runner=runner, locks=locks, store=store
+                )
+            # done releases the slug; tear down git residue so preflight passes again.
+            await tasks.update_task("reuse", status="done", store=store)
+            _git(
+                tmp_git_repo,
+                "worktree",
+                "remove",
+                "--force",
+                first["worktrees"][0]["worktree_path"],
+            )
+            _git(tmp_git_repo, "branch", "-D", "agent/reuse")
+            second = await tasks.create(
+                "reuse", "third", [str(tmp_git_repo)], runner=runner, locks=locks, store=store
+            )
+            return second, await store.get_task("reuse")
+        finally:
+            await store.close()
+
+    second, row = asyncio.run(run())
+    assert second["task_id"] == "reuse"
+    assert row["status"] == "running"  # re-tasked from done
+    assert row["description"] == "third"
+
+
+def test_list_tasks_links_and_filters(tmp_path):
+    """AC5: list_tasks returns full task rows with nested per-repo links; status/repo
+    filters narrow correctly; an empty-string repo means 'no filter' (1.5 fix)."""
+    repos = [tmp_path / "a", tmp_path / "b"]
+    for r in repos:
+        _init_repo(r)
+
+    async def run():
+        store = await _make_store(tmp_path)
+        try:
+            runner = GitRunner()
+            locks = RepoLockRegistry()
+            await tasks.create(
+                "alpha",
+                "d",
+                [str(repos[0]), str(repos[1])],
+                runner=runner,
+                locks=locks,
+                store=store,
+            )
+            await tasks.create(
+                "beta", "d", [str(repos[0])], runner=runner, locks=locks, store=store
+            )
+            return (
+                await tasks.list_tasks(store=store),
+                await tasks.list_tasks(repo=str(repos[1]), store=store),
+                await tasks.list_tasks(repo="", store=store),
+                await tasks.list_tasks(status="done", store=store),
+            )
+        finally:
+            await store.close()
+
+    all_tasks, by_repo_b, empty_filter, done_only = asyncio.run(run())
+    abspaths = sorted(os.path.abspath(str(r)) for r in repos)
+    assert [t["task_id"] for t in all_tasks] == ["alpha", "beta"]
+    alpha = all_tasks[0]
+    assert set(alpha) == {
+        "task_id",
+        "description",
+        "status",
+        "created_at",
+        "updated_at",
+        "worktrees",
+    }
+    assert [w["repo_path"] for w in alpha["worktrees"]] == abspaths  # spans both, sorted
+    assert alpha["worktrees"][0]["branch"] == "agent/alpha"
+    # repo filter: only the task touching repo b, links limited to it.
+    assert [t["task_id"] for t in by_repo_b] == ["alpha"]
+    assert [w["repo_path"] for w in by_repo_b[0]["worktrees"]] == [os.path.abspath(str(repos[1]))]
+    # empty-string repo == no filter.
+    assert {t["task_id"] for t in empty_filter} == {"alpha", "beta"}
+    # nothing is done yet.
+    assert done_only == []

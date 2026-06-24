@@ -15,6 +15,7 @@ TAXONOMY = [
     (errors.ActiveTaskConflict, "ActiveTaskConflict"),
     (errors.LockedWorktree, "LockedWorktree"),
     (errors.InvalidTaskName, "InvalidTaskName"),
+    (errors.InvalidStatus, "InvalidStatus"),
     (errors.GitTimeout, "GitTimeout"),
     (errors.InstanceConflict, "InstanceConflict"),
     (errors.NotAGitRepo, "NotAGitRepo"),

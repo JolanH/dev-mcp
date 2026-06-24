@@ -97,6 +97,34 @@ def branch_name_for(slug: str) -> str:
     return f"{BRANCH_PREFIX}{slug}"
 
 
+# ── Task status lifecycle (core/tasks.py update_task) ──
+
+#: The four legal task statuses. Mirrors the SQL ``CHECK`` in ``store.py`` — keep the
+#: two in sync (the CHECK is the DB backstop; this constant is the core-layer guard so
+#: a bad status is rejected as typed-error-as-data BEFORE hitting the DB CHECK).
+#: ``blocked`` = awaiting input, ``review`` = awaiting operator review (still active),
+#: ``done`` = terminal.
+TASK_STATUSES: tuple[str, ...] = ("running", "blocked", "review", "done")
+#: The active (non-terminal) subset — a slug owned by an active task cannot be
+#: re-created (the ``create_task`` active-gate is literally ``status != 'done'``).
+ACTIVE_STATUSES = frozenset({"running", "blocked", "review"})
+#: The single terminal status; a ``done`` task cannot be moved back to an active state
+#: (re-activating a slug is a NEW ``create_task``, never ``update_task``).
+TERMINAL_STATUS = "done"
+
+
+def legal_transition(src: str, dst: str) -> bool:
+    """Whether a status change from ``src`` to ``dst`` is permitted.
+
+    From any active status (``running``/``blocked``/``review``) any of the four states
+    is reachable — including active→``done`` and idempotent self-transitions. ``done``
+    is terminal, so ``done → *`` is always illegal (including ``done → done``). This
+    yields the 4×4 matrix: 12 legal (3 active source rows × 4) / 4 illegal (the
+    ``done`` source row).
+    """
+    return dst in TASK_STATUSES and src != TERMINAL_STATUS
+
+
 # ── Persistence — store.py ──
 
 #: DB filename inside the machine-global state dir.

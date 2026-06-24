@@ -248,6 +248,85 @@ class Store:
         await self._conn.execute("DELETE FROM task WHERE task_id = ?", (task_id,))
         await self._conn.commit()
 
+    async def update_task(
+        self,
+        task_id: str,
+        *,
+        status: str | None = None,
+        description: str | None = None,
+        updated_at: str,
+    ) -> bool:
+        """Update a task's ``status``/``description`` and bump ``updated_at`` (Story 1.6).
+
+        The ``SET`` clause is built dynamically from the provided fields (only the
+        non-``None`` ``status``/``description``) PLUS always ``updated_at``;
+        ``created_at`` is NEVER touched (preserved — architecture.md:336-337). Values go
+        through parameterized placeholders only (no string interpolation of values).
+        Returns whether a row matched (``rowcount == 1``) so core can raise
+        ``TaskNotFound`` on ``False``. A DB ``CHECK`` violation is NOT mapped here —
+        core validates the status first, so the CHECK is a defensive backstop, never the
+        rejection path.
+        """
+        sets: list[str] = []
+        params: list[str] = []
+        if status is not None:
+            sets.append("status = ?")
+            params.append(status)
+        if description is not None:
+            sets.append("description = ?")
+            params.append(description)
+        sets.append("updated_at = ?")
+        params.append(updated_at)
+        params.append(task_id)
+        sql = f"UPDATE task SET {', '.join(sets)} WHERE task_id = ?"
+        cursor = await self._conn.execute(sql, params)
+        await self._conn.commit()
+        return cursor.rowcount == 1
+
+    async def list_tasks(self, *, status: str | None = None, repo: str | None = None) -> list[dict]:
+        """Return one dict per matching task with all model fields + nested links (Story 1.6).
+
+        Each entry is ``{task_id, description, status, created_at, updated_at,
+        worktrees: [{repo_path, branch, worktree_path}, …]}``. Filters: ``status``
+        narrows the ``task`` rows; ``repo`` returns only tasks that *touch* that repo,
+        with that task's links limited to it (callers pass a canonical abspath for
+        ``repo``, mirroring :meth:`list_worktree_links`). Tasks are sorted by ``task_id``
+        ASC, worktrees by ``repo_path`` ASC (stable order). Parameterized; read-only; no
+        schema change.
+        """
+        task_sql = "SELECT task_id, description, status, created_at, updated_at FROM task"
+        params: list[str] = []
+        if status is not None:
+            task_sql += " WHERE status = ?"
+            params.append(status)
+        task_sql += " ORDER BY task_id"
+        async with self._conn.execute(task_sql, params) as cur:
+            task_rows = await cur.fetchall()
+        task_keys = ("task_id", "description", "status", "created_at", "updated_at")
+        tasks = [dict(zip(task_keys, row, strict=True)) for row in task_rows]
+
+        # Reuse the existing JOIN shape for the links (repo-limited when given); it
+        # already orders by (task_id, repo_path) so the grouped lists are repo-sorted.
+        links = await self.list_worktree_links(repo=repo)
+        by_task: dict[str, list[dict]] = {}
+        for link in links:
+            by_task.setdefault(link["task_id"], []).append(
+                {
+                    "repo_path": link["repo_path"],
+                    "branch": link["branch"],
+                    "worktree_path": link["worktree_path"],
+                }
+            )
+
+        result: list[dict] = []
+        for task in tasks:
+            worktrees = by_task.get(task["task_id"], [])
+            # A repo filter returns only tasks that touch that repo.
+            if repo is not None and not worktrees:
+                continue
+            result.append({**task, "worktrees": worktrees})
+        return result
+
     # ── introspection helpers ──
 
     async def table_names(self) -> list[str]:

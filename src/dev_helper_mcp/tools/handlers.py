@@ -16,7 +16,13 @@ from ..errors import DevHelperError, Internal
 from ..git.repo_lock import RepoLockRegistry
 from ..git.runner import GitRunner
 from ..store import Store
-from .models import CreateTaskIn, ListWorktreesIn, RemoveWorktreeIn
+from .models import (
+    CreateTaskIn,
+    ListTasksIn,
+    ListWorktreesIn,
+    RemoveWorktreeIn,
+    UpdateTaskIn,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -90,4 +96,33 @@ async def remove_worktree(inp: RemoveWorktreeIn, *, deps: ToolDeps) -> dict:
         return {"ok": False, "data": None, "error": exc.as_dict()}
     except Exception:  # noqa: BLE001 — never leak a stack trace through the tool
         logger.exception("unexpected error in remove_worktree")
+        return {"ok": False, "data": None, "error": Internal("unexpected error").as_dict()}
+
+
+async def update_task(inp: UpdateTaskIn, *, deps: ToolDeps) -> dict:
+    """Handle ``update_task``: run the core status/description update, return the envelope."""
+    try:
+        data = await tasks.update_task(
+            inp.task_id,
+            status=inp.status,
+            description=inp.description,
+            store=deps.store,
+        )
+        return {"ok": True, "data": data, "error": None}
+    except DevHelperError as exc:
+        return {"ok": False, "data": None, "error": exc.as_dict()}
+    except Exception:  # noqa: BLE001 — never leak a stack trace through the tool
+        logger.exception("unexpected error in update_task")
+        return {"ok": False, "data": None, "error": Internal("unexpected error").as_dict()}
+
+
+async def list_tasks(inp: ListTasksIn, *, deps: ToolDeps) -> dict:
+    """Handle ``list_tasks``: read the filtered task view from the store, return the envelope."""
+    try:
+        data = await tasks.list_tasks(status=inp.status, repo=inp.repo, store=deps.store)
+        return {"ok": True, "data": data, "error": None}
+    except DevHelperError as exc:
+        return {"ok": False, "data": None, "error": exc.as_dict()}
+    except Exception:  # noqa: BLE001 — never leak a stack trace through the tool
+        logger.exception("unexpected error in list_tasks")
         return {"ok": False, "data": None, "error": Internal("unexpected error").as_dict()}

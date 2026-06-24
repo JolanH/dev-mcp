@@ -39,3 +39,26 @@ class RemoveWorktreeIn(BaseModel):
     delete_branch: bool = False
     force: bool = False
     force_unmerged_branch: bool = False
+
+
+class UpdateTaskIn(BaseModel):
+    """Validated input for the ``update_task`` tool.
+
+    ``status`` is kept as ``str | None``, NOT a ``Literal``/enum, on purpose: an
+    out-of-set value must be rejected by CORE as typed-error-as-data
+    (``{ok:false, error:…}``), not raised as a Pydantic ``ValidationError``. The model
+    is built inside the ``server_factory`` closure, OUTSIDE the handler's try/except, so
+    a ``Literal`` there would surface a raw validation failure instead of the contract
+    envelope.
+    """
+
+    task_id: str
+    status: str | None = None
+    description: str | None = None
+
+
+class ListTasksIn(BaseModel):
+    """Validated input for the ``list_tasks`` tool (both filters optional)."""
+
+    status: str | None = None
+    repo: str | None = None

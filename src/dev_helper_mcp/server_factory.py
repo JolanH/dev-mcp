@@ -39,8 +39,13 @@ from .middleware import OriginValidationMiddleware
 from .store import Store
 from .tools import handlers
 from .tools.handlers import ToolDeps
-from .tools.models import CreateTaskIn, ListWorktreesIn, RemoveWorktreeIn
-from .util import now_iso
+from .tools.models import (
+    CreateTaskIn,
+    ListTasksIn,
+    ListWorktreesIn,
+    RemoveWorktreeIn,
+    UpdateTaskIn,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -57,19 +62,15 @@ class _DepsHolder:
 
 
 def build_mcp(holder: _DepsHolder) -> FastMCP:
-    """Build the FastMCP server with the ``ping``, ``create_task``, ``list_worktrees``
-    and ``remove_worktree`` tools.
+    """Build the FastMCP server with the FINAL 5-tool surface: ``create_task``,
+    ``list_worktrees``, ``remove_worktree``, ``update_task`` and ``list_tasks``.
 
-    ``holder.deps`` is populated later by the app lifespan; each tool closure reads it
-    at call time (returning a clean ``server not ready`` envelope in the startup/
-    teardown window).
+    (Story 1.6 removed the throwaway ``ping`` seed and added the two task tools to lock
+    the exactly-5 surface — AC 6.) ``holder.deps`` is populated later by the app
+    lifespan; each tool closure reads it at call time (returning a clean ``server not
+    ready`` envelope in the startup/teardown window).
     """
     mcp = FastMCP(APP_NAME)
-
-    @mcp.tool()
-    def ping() -> dict:
-        """Trivial health/liveness tool seeding the {ok, data, error} envelope."""
-        return {"ok": True, "data": {"pong": True, "time": now_iso()}, "error": None}
 
     @mcp.tool()
     async def create_task(
@@ -137,6 +138,46 @@ def build_mcp(holder: _DepsHolder) -> FastMCP:
             force_unmerged_branch=force_unmerged_branch,
         )
         return await handlers.remove_worktree(inp, deps=deps)
+
+    @mcp.tool()
+    async def update_task(
+        task_id: str,
+        status: str | None = None,
+        description: str | None = None,
+    ) -> dict:
+        """Update a task's status and/or description (self-report progress).
+
+        ``status`` must be one of the four states: ``running``, ``blocked`` (awaiting
+        input), ``review`` (awaiting review), ``done`` (terminal). Any active state can
+        move to any of the four; ``done`` is terminal — a done task cannot be
+        re-activated (start a new ``create_task`` of the same slug instead). An
+        out-of-set value or an illegal transition returns an ``InvalidStatus`` error.
+        Setting ``done`` releases the slug for reuse and flags the task closed (its
+        worktrees are left untouched). Returns the ``{ok, data, error}`` envelope.
+        """
+        deps = holder.deps
+        if deps is None:
+            return {"ok": False, "data": None, "error": Internal("server not ready").as_dict()}
+
+        inp = UpdateTaskIn(task_id=task_id, status=status, description=description)
+        return await handlers.update_task(inp, deps=deps)
+
+    @mcp.tool()
+    async def list_tasks(status: str | None = None, repo: str | None = None) -> dict:
+        """List tasks, optionally filtered by ``status`` or ``repo`` (a Store read).
+
+        Each task is returned with all model fields (``task_id``, ``description``,
+        ``status``, ``created_at``, ``updated_at``) plus its per-repo
+        ``worktrees: [{repo_path, branch, worktree_path}, …]`` links. A ``repo`` filter
+        returns only tasks that touch that repo (links limited to it); empty filters
+        mean "no filter". Returns the ``{ok, data, error}`` envelope.
+        """
+        deps = holder.deps
+        if deps is None:
+            return {"ok": False, "data": None, "error": Internal("server not ready").as_dict()}
+
+        inp = ListTasksIn(status=status, repo=repo)
+        return await handlers.list_tasks(inp, deps=deps)
 
     # Serve the streamable-HTTP endpoint at /mcp directly so a bare /mcp resolves
     # with no trailing-slash 307 redirect (see module docstring).

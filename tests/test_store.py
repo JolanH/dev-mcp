@@ -178,6 +178,121 @@ def test_persist_active_slug_clash_maps_to_active_task_conflict(tmp_path):
     assert row["description"] == "first"  # original untouched
 
 
+# ── Story 1.6: store.update_task + store.list_tasks (pure Store, no git) ──
+
+
+def test_update_task_changes_fields_and_bumps_updated_at(tmp_path):
+    """update_task sets status+description, bumps updated_at, preserves created_at."""
+
+    async def main():
+        store = await Store.open(tmp_path / "state.db")
+        try:
+            await store.add_task("t1", "first", "running", _TS, _TS)
+            matched = await store.update_task(
+                "t1", status="review", description="second", updated_at="2026-06-22T12:00:00Z"
+            )
+            return matched, await store.get_task("t1")
+        finally:
+            await store.close()
+
+    matched, row = asyncio.run(main())
+    assert matched is True
+    assert row["status"] == "review"
+    assert row["description"] == "second"
+    assert row["created_at"] == _TS  # preserved
+    assert row["updated_at"] == "2026-06-22T12:00:00Z"  # bumped
+
+
+def test_update_task_status_only_leaves_description(tmp_path):
+    async def main():
+        store = await Store.open(tmp_path / "state.db")
+        try:
+            await store.add_task("t1", "keep me", "running", _TS, _TS)
+            await store.update_task("t1", status="blocked", updated_at="2026-06-22T12:00:00Z")
+            return await store.get_task("t1")
+        finally:
+            await store.close()
+
+    row = asyncio.run(main())
+    assert row["status"] == "blocked"
+    assert row["description"] == "keep me"  # untouched
+
+
+def test_update_task_unknown_id_returns_false(tmp_path):
+    async def main():
+        store = await Store.open(tmp_path / "state.db")
+        try:
+            return await store.update_task("ghost", status="done", updated_at=_TS)
+        finally:
+            await store.close()
+
+    assert asyncio.run(main()) is False
+
+
+def test_list_tasks_returns_full_rows_with_nested_links(tmp_path):
+    async def main():
+        store = await Store.open(tmp_path / "state.db")
+        try:
+            await store.add_task("t1", "desc1", "running", _TS, _TS)
+            await store.add_worktree("t1", "/repo/b", "agent/t1", "/repo/b.worktrees/t1")
+            await store.add_worktree("t1", "/repo/a", "agent/t1", "/repo/a.worktrees/t1")
+            await store.add_task("t2", "desc2", "done", _TS, _TS)
+            await store.add_worktree("t2", "/repo/a", "agent/t2", "/repo/a.worktrees/t2")
+            return await store.list_tasks()
+        finally:
+            await store.close()
+
+    tasks = asyncio.run(main())
+    assert [t["task_id"] for t in tasks] == ["t1", "t2"]  # sorted by task_id
+    t1 = tasks[0]
+    assert set(t1) == {
+        "task_id",
+        "description",
+        "status",
+        "created_at",
+        "updated_at",
+        "worktrees",
+    }
+    # Worktrees sorted by repo_path; full link fields.
+    assert [w["repo_path"] for w in t1["worktrees"]] == ["/repo/a", "/repo/b"]
+    assert set(t1["worktrees"][0]) == {"repo_path", "branch", "worktree_path"}
+    assert t1["worktrees"][0]["branch"] == "agent/t1"
+
+
+def test_list_tasks_status_and_repo_filters(tmp_path):
+    async def main():
+        store = await Store.open(tmp_path / "state.db")
+        try:
+            await store.add_task("t1", "d", "running", _TS, _TS)
+            await store.add_worktree("t1", "/repo/a", "agent/t1", "/repo/a.worktrees/t1")
+            await store.add_task("t2", "d", "done", _TS, _TS)
+            await store.add_worktree("t2", "/repo/b", "agent/t2", "/repo/b.worktrees/t2")
+            by_status = await store.list_tasks(status="done")
+            by_repo = await store.list_tasks(repo="/repo/a")
+            empty = await store.list_tasks(status="blocked")
+            return by_status, by_repo, empty
+        finally:
+            await store.close()
+
+    by_status, by_repo, empty = asyncio.run(main())
+    assert [t["task_id"] for t in by_status] == ["t2"]
+    # repo filter: only the task touching /repo/a, links limited to it.
+    assert [t["task_id"] for t in by_repo] == ["t1"]
+    assert [w["repo_path"] for w in by_repo[0]["worktrees"]] == ["/repo/a"]
+    assert empty == []
+
+
+def test_list_tasks_empty_store(tmp_path):
+    async def main():
+        store = await Store.open(tmp_path / "state.db")
+        try:
+            return await store.list_tasks()
+        finally:
+            await store.close()
+
+    assert asyncio.run(main()) == []
+
+
 def test_refuses_newer_schema_version(tmp_path):
     db = tmp_path / "state.db"
 

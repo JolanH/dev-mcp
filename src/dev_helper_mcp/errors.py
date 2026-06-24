@@ -70,6 +70,14 @@ class InvalidTaskName(DevHelperError):
     code = "InvalidTaskName"
 
 
+class InvalidStatus(DevHelperError):
+    """A status update failed validation: an out-of-set value, or an illegal
+    transition (``done`` is terminal). ``details.reason`` discriminates
+    ``"not_in_set"`` vs ``"illegal_transition"`` so the agent can branch."""
+
+    code = "InvalidStatus"
+
+
 class GitTimeout(DevHelperError):
     code = "GitTimeout"
 

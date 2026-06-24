@@ -470,7 +470,9 @@ detectable orphan); multi-repo; CI pipeline; SQLite migration *runner* (version-
   (`[AMENDED 2026-06-22]` a supplied repo path is not a git repository), `RollbackIncomplete`
   (`[AMENDED 2026-06-22]` a `create_task` compensating teardown itself failed — `details` lists the
   repo paths left orphaned; the original cause is preserved), `PortUnavailable` (explicit `--port`
-  bind failed). Each `{code, message, details}`.
+  bind failed), `InvalidStatus` (`[AMENDED 2026-06-24, Story 1.6]` an `update_task` status is outside
+  the four-state set OR an illegal transition — `done` is terminal; `details.reason ∈ {"not_in_set",
+  "illegal_transition"}`). Each `{code, message, details}`.
 - **Removal force-flag semantics (two distinct guards — distinct blast radii, hence two flags):**
   `force` → dirty/locked *worktree* removal (`git worktree remove --force`); `force_unmerged_branch`
   → *branch* deletion with unmerged commits (`git branch -D` vs `-d`), surfacing the
@@ -622,8 +624,10 @@ divergent choice. They govern HOW to implement, not WHAT. All are mandatory unle
 - **`error.code`** is from the fixed Step-4 taxonomy (`BranchExists`, `WorktreePathInUse`,
   `BaseRefNotFound`, `DirtyWorktree`, `UnmergedBranch`, `TaskNotFound`, `ActiveTaskConflict`,
   `LockedWorktree`, `InvalidTaskName`, `GitTimeout`, `InstanceConflict`, `NotAGitRepo`,
-  `RollbackIncomplete`, `PortUnavailable`, `Internal`). `[AMENDED 2026-06-22]` `NotAGitRepo` and
-  `RollbackIncomplete` added for multi-repo. Codes are stable contract; messages may change.
+  `RollbackIncomplete`, `PortUnavailable`, `InvalidStatus`, `Internal`). `[AMENDED 2026-06-22]`
+  `NotAGitRepo` and `RollbackIncomplete` added for multi-repo. `[AMENDED 2026-06-24, Story 1.6]`
+  `InvalidStatus` added for the `update_task` four-state guard + transition matrix. Codes are stable
+  contract; messages may change.
 
 ### Structure & Process Patterns
 

@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-06-22T10:35:15
-last_updated: 2026-06-23
+last_updated: 2026-06-24
 project: dev-helper-mcp
 project_key: NOKEY
 tracking_system: file-system
@@ -49,7 +49,7 @@ development_status:
   1-3-create-a-multi-repo-task-happy-path: done
   1-4-create-task-cross-repo-rollback-error-safe: done
   1-5-list-and-remove-worktrees: done
-  1-6-update-and-list-tasks-status-lifecycle-and-complete-the-tool-surface: backlog
+  1-6-update-and-list-tasks-status-lifecycle-and-complete-the-tool-surface: done
   epic-1-retrospective: optional
 
   # Epic 2: Live multi-repo monitoring dashboard

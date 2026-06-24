@@ -21,7 +21,12 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from ..config import branch_name_for, worktree_path_for
+from ..config import (
+    TASK_STATUSES,
+    branch_name_for,
+    legal_transition,
+    worktree_path_for,
+)
 from ..core.mutator import GitRepoMutator, RepoMutator
 from ..core.slug import slugify
 from ..errors import (
@@ -29,8 +34,10 @@ from ..errors import (
     BaseRefNotFound,
     BranchExists,
     DevHelperError,
+    InvalidStatus,
     InvalidTaskName,
     RollbackIncomplete,
+    TaskNotFound,
     WorktreePathInUse,
 )
 from ..git.repo_lock import RepoLockRegistry
@@ -201,3 +208,105 @@ async def create(
     finally:
         for lock in reversed(acquired):  # release in reverse order
             lock.release()
+
+
+async def update_task(
+    task_id: str,
+    *,
+    status: str | None = None,
+    description: str | None = None,
+    store: Store,
+) -> dict:
+    """Update an EXISTING task's status and/or description; bump ``updated_at`` (Story 1.6).
+
+    SDK-free core: plain args, an injected ``store``, raises a typed ``DevHelperError``.
+    UPDATE-only — never UPSERT, never create. Order of operations:
+
+    1. Resolve the task (``get_task``); ``None`` → ``TaskNotFound`` (AC 3).
+    2. Validate ``status`` (when given): out of :data:`TASK_STATUSES` →
+       ``InvalidStatus(reason="not_in_set")`` (AC 1).
+    3. Validate the transition: ``not legal_transition(current, status)`` →
+       ``InvalidStatus(reason="illegal_transition")`` (AC 2). ``done`` is terminal, so a
+       ``done`` task rejects ANY status update; active→{active,done} all pass.
+    4. Apply via ``store.update_task`` (``created_at`` preserved, ``updated_at`` bumped).
+
+    Takes NO per-repo mutex (Invariant 12 / AR-14: only per-repo git mutations
+    serialize; this touches the ``task`` row, not a worktree). AC 4 ("done releases the
+    slug, flags closed") is a consequence, not extra code: ``status='done'`` makes the
+    task non-active because "active" is defined everywhere as ``status != 'done'`` (the
+    ``create`` gate above) — the row and its links are kept (the dashboard folds it; a
+    later ``create_task`` of the same slug succeeds). Returns the updated task dict.
+    """
+    existing = await store.get_task(task_id)
+    if existing is None:
+        raise TaskNotFound("no such task", {"task_id": task_id})
+
+    # No-op guard: nothing to change → return the task unchanged with NO DB write and
+    # NO updated_at bump (a meaningless timestamp mutation Epic 2's staleness/sort could
+    # key on). A no-op against a missing task still raises TaskNotFound (above).
+    if status is None and description is None:
+        return {
+            "task_id": task_id,
+            "status": existing["status"],
+            "description": existing["description"],
+            "created_at": existing["created_at"],
+            "updated_at": existing["updated_at"],
+        }
+
+    if status is not None:
+        if status not in TASK_STATUSES:
+            raise InvalidStatus(
+                "status is not one of the four legal states",
+                {
+                    "task_id": task_id,
+                    "status": status,
+                    "allowed": list(TASK_STATUSES),
+                    "reason": "not_in_set",
+                },
+            )
+        if not legal_transition(existing["status"], status):
+            raise InvalidStatus(
+                "illegal status transition (done is terminal)",
+                {
+                    "task_id": task_id,
+                    "from": existing["status"],
+                    "to": status,
+                    "reason": "illegal_transition",
+                },
+            )
+
+    ts = now_iso()
+    matched = await store.update_task(
+        task_id, status=status, description=description, updated_at=ts
+    )
+    if not matched:
+        # Safety net: the row vanished between the get_task precheck and this write
+        # (e.g. a concurrent remove_worktree last-worktree delete) — surface it rather
+        # than fabricate success from the now-stale `existing` snapshot.
+        raise TaskNotFound("no such task", {"task_id": task_id})
+    return {
+        "task_id": task_id,
+        "status": status if status is not None else existing["status"],
+        "description": description if description is not None else existing["description"],
+        "created_at": existing["created_at"],
+        "updated_at": ts,
+    }
+
+
+async def list_tasks(
+    *,
+    status: str | None = None,
+    repo: str | None = None,
+    store: Store,
+) -> list[dict]:
+    """List tasks (filterable) with all model fields + per-repo links (AC 5).
+
+    A thin core wrapper over ``store.list_tasks`` — a Store read, NOT a live-git
+    fan-out and NOT a cache (that view is Epic 2). Takes no mutex (read path). Empty /
+    falsy ``status``/``repo`` mean "no filter" (the 1.5 fix — an empty-string ``repo``
+    must NOT ``abspath("")`` to the cwd); a non-empty ``repo`` is abspath'd to match the
+    absolute ``repo_path`` stored on links. Raises only what the store surfaces.
+    """
+    repo_filter = os.path.abspath(repo) if repo else None
+    status_filter = status if status else None
+    return await store.list_tasks(status=status_filter, repo=repo_filter)

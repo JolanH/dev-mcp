@@ -11,10 +11,18 @@ from dev_helper_mcp.store import Store
 from dev_helper_mcp.tools.handlers import (
     ToolDeps,
     create_task,
+    list_tasks,
     list_worktrees,
     remove_worktree,
+    update_task,
 )
-from dev_helper_mcp.tools.models import CreateTaskIn, ListWorktreesIn, RemoveWorktreeIn
+from dev_helper_mcp.tools.models import (
+    CreateTaskIn,
+    ListTasksIn,
+    ListWorktreesIn,
+    RemoveWorktreeIn,
+    UpdateTaskIn,
+)
 
 
 def _deps(store):
@@ -154,3 +162,96 @@ def test_remove_worktree_typed_error_envelope(tmp_path):
     assert env["ok"] is False
     assert env["data"] is None
     assert env["error"]["code"] == "TaskNotFound"
+
+
+# ── update_task / list_tasks envelopes (Story 1.6) ──
+
+
+def test_update_task_success_envelope(tmp_path):
+    async def run():
+        store = await Store.open(tmp_path / "state.db")
+        try:
+            await store.add_task(
+                "t1", "first", "running", "2026-06-22T10:00:00Z", "2026-06-22T10:00:00Z"
+            )
+            return await update_task(
+                UpdateTaskIn(task_id="t1", status="review", description="second"),
+                deps=_deps(store),
+            )
+        finally:
+            await store.close()
+
+    env = asyncio.run(run())
+    assert set(env) == {"ok", "data", "error"}
+    assert env["ok"] is True
+    assert env["error"] is None
+    assert set(env["data"]) == {"task_id", "status", "description", "created_at", "updated_at"}
+    assert env["data"]["status"] == "review"
+    assert env["data"]["description"] == "second"
+
+
+def test_update_task_not_found_envelope(tmp_path):
+    async def run():
+        store = await Store.open(tmp_path / "state.db")
+        try:
+            return await update_task(
+                UpdateTaskIn(task_id="ghost", status="done"), deps=_deps(store)
+            )
+        finally:
+            await store.close()
+
+    env = asyncio.run(run())
+    assert env["ok"] is False
+    assert env["data"] is None
+    assert env["error"]["code"] == "TaskNotFound"
+
+
+def test_update_task_invalid_status_envelope(tmp_path):
+    """An out-of-set status is error-as-data (NOT a Pydantic ValidationError escaping)."""
+
+    async def run():
+        store = await Store.open(tmp_path / "state.db")
+        try:
+            await store.add_task(
+                "t1", "d", "running", "2026-06-22T10:00:00Z", "2026-06-22T10:00:00Z"
+            )
+            return await update_task(UpdateTaskIn(task_id="t1", status="bogus"), deps=_deps(store))
+        finally:
+            await store.close()
+
+    env = asyncio.run(run())
+    assert env["ok"] is False
+    assert env["data"] is None
+    assert env["error"]["code"] == "InvalidStatus"
+    assert env["error"]["details"]["reason"] == "not_in_set"
+
+
+def test_list_tasks_success_envelope(tmp_git_repo, tmp_path):
+    async def run():
+        store = await Store.open(tmp_path / "state.db")
+        try:
+            deps = _deps(store)
+            await create_task(
+                CreateTaskIn(task_name="feat", description="d", repos=[str(tmp_git_repo)]),
+                deps=deps,
+            )
+            return await list_tasks(ListTasksIn(), deps=deps)
+        finally:
+            await store.close()
+
+    env = asyncio.run(run())
+    assert set(env) == {"ok", "data", "error"}
+    assert env["ok"] is True
+    assert env["error"] is None
+    assert len(env["data"]) == 1
+    task = env["data"][0]
+    assert set(task) == {
+        "task_id",
+        "description",
+        "status",
+        "created_at",
+        "updated_at",
+        "worktrees",
+    }
+    assert task["task_id"] == "feat"
+    assert task["worktrees"][0]["branch"] == "agent/feat"
