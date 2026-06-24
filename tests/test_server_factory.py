@@ -105,3 +105,43 @@ def test_create_task_tool_registered_and_reachable(
     assert payload["ok"] is True
     assert payload["data"]["task_id"] == "via-mcp"
     assert payload["data"]["worktrees"][0]["branch"] == "agent/via-mcp"
+
+
+def test_list_and_remove_worktree_tools_registered_and_reachable(
+    app, asgi_client_factory, base_url, tmp_git_repo
+):
+    """list_worktrees + remove_worktree are registered and round-trip end-to-end."""
+
+    async def _run():
+        async with app.router.lifespan_context(app):
+            async with asgi_client_factory() as http_client:
+                async with streamable_http_client(
+                    url=f"{base_url}/mcp",
+                    http_client=http_client,
+                ) as (read, write, _get_session_id):
+                    async with ClientSession(read, write) as session:
+                        await session.initialize()
+                        names = {t.name for t in (await session.list_tools()).tools}
+                        await session.call_tool(
+                            "create_task",
+                            {
+                                "task_name": "wt-tool",
+                                "description": "d",
+                                "repos": [str(tmp_git_repo)],
+                            },
+                        )
+                        listed = await session.call_tool("list_worktrees", {})
+                        removed = await session.call_tool(
+                            "remove_worktree",
+                            {"task_id": "wt-tool", "repo": str(tmp_git_repo)},
+                        )
+                        return names, listed, removed
+
+    names, listed, removed = asyncio.run(_run())
+    assert {"list_worktrees", "remove_worktree"} <= names
+    list_payload = json.loads(listed.content[0].text)
+    assert list_payload["ok"] is True
+    assert list_payload["data"][0]["task_id"] == "wt-tool"
+    remove_payload = json.loads(removed.content[0].text)
+    assert remove_payload["ok"] is True
+    assert remove_payload["data"]["task_closed"] is True

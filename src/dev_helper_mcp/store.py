@@ -192,6 +192,51 @@ class Store:
         keys = ("task_id", "description", "status", "created_at", "updated_at")
         return dict(zip(keys, row, strict=True))
 
+    async def list_worktree_links(
+        self, *, repo: str | None = None, task_id: str | None = None
+    ) -> list[dict]:
+        """Return ``task_worktree`` rows joined to their ``task`` status (Story 1.5).
+
+        Read-only; parameterized; ordered for stable output. Each row is
+        ``{task_id, repo_path, branch, worktree_path, status}``. Optional ``repo`` /
+        ``task_id`` narrow the result (callers pass a canonical abspath for ``repo``).
+        This is the stored side of the AC1 live-git × store join — worktree
+        *existence* is still derived from git, never read here.
+        """
+        sql = (
+            "SELECT tw.task_id, tw.repo_path, tw.branch, tw.worktree_path, t.status "
+            "FROM task_worktree tw JOIN task t ON t.task_id = tw.task_id"
+        )
+        conditions: list[str] = []
+        params: list[str] = []
+        if repo is not None:
+            conditions.append("tw.repo_path = ?")
+            params.append(repo)
+        if task_id is not None:
+            conditions.append("tw.task_id = ?")
+            params.append(task_id)
+        if conditions:
+            sql += " WHERE " + " AND ".join(conditions)
+        sql += " ORDER BY tw.task_id, tw.repo_path"
+
+        async with self._conn.execute(sql, params) as cur:
+            rows = await cur.fetchall()
+        keys = ("task_id", "repo_path", "branch", "worktree_path", "status")
+        return [dict(zip(keys, row, strict=True)) for row in rows]
+
+    async def delete_worktree(self, task_id: str, repo_path: str) -> None:
+        """Drop ONE ``task_worktree`` link by its ``(task_id, repo_path)`` PK (Story 1.5).
+
+        Sibling links for the same ``task_id`` in other repos are untouched. The
+        ``task`` row is NOT removed here — removing the task's *last* worktree is the
+        caller's AC5 concern (``count_worktrees`` + ``delete_task``).
+        """
+        await self._conn.execute(
+            "DELETE FROM task_worktree WHERE task_id = ? AND repo_path = ?",
+            (task_id, repo_path),
+        )
+        await self._conn.commit()
+
     async def count_worktrees(self, task_id: str) -> int:
         async with self._conn.execute(
             "SELECT COUNT(*) FROM task_worktree WHERE task_id = ?", (task_id,)

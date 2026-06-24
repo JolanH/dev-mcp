@@ -8,8 +8,13 @@ import asyncio
 from dev_helper_mcp.git.repo_lock import RepoLockRegistry
 from dev_helper_mcp.git.runner import GitRunner
 from dev_helper_mcp.store import Store
-from dev_helper_mcp.tools.handlers import ToolDeps, create_task
-from dev_helper_mcp.tools.models import CreateTaskIn
+from dev_helper_mcp.tools.handlers import (
+    ToolDeps,
+    create_task,
+    list_worktrees,
+    remove_worktree,
+)
+from dev_helper_mcp.tools.models import CreateTaskIn, ListWorktreesIn, RemoveWorktreeIn
 
 
 def _deps(store):
@@ -79,3 +84,73 @@ def test_not_a_repo_error_envelope(tmp_path):
     env = asyncio.run(run())
     assert env["ok"] is False
     assert env["error"]["code"] == "NotAGitRepo"
+
+
+# ── list_worktrees / remove_worktree envelopes (Story 1.5) ──
+
+
+def test_list_worktrees_success_envelope(tmp_git_repo, tmp_path):
+    async def run():
+        store = await Store.open(tmp_path / "state.db")
+        try:
+            deps = _deps(store)
+            await create_task(
+                CreateTaskIn(task_name="feat", description="d", repos=[str(tmp_git_repo)]),
+                deps=deps,
+            )
+            return await list_worktrees(ListWorktreesIn(), deps=deps)
+        finally:
+            await store.close()
+
+    env = asyncio.run(run())
+    assert set(env) == {"ok", "data", "error"}
+    assert env["ok"] is True
+    assert env["error"] is None
+    assert len(env["data"]) == 1
+    entry = env["data"][0]
+    # snake_case keys only.
+    assert set(entry) == {"task_id", "repo_path", "branch", "worktree_path", "status", "orphaned"}
+    assert entry["task_id"] == "feat"
+    assert entry["orphaned"] is False
+
+
+def test_remove_worktree_success_envelope(tmp_git_repo, tmp_path):
+    async def run():
+        store = await Store.open(tmp_path / "state.db")
+        try:
+            deps = _deps(store)
+            await create_task(
+                CreateTaskIn(task_name="feat", description="d", repos=[str(tmp_git_repo)]),
+                deps=deps,
+            )
+            return await remove_worktree(
+                RemoveWorktreeIn(task_id="feat", repo=str(tmp_git_repo)), deps=deps
+            )
+        finally:
+            await store.close()
+
+    env = asyncio.run(run())
+    assert set(env) == {"ok", "data", "error"}
+    assert env["ok"] is True
+    assert env["data"]["task_id"] == "feat"
+    assert env["data"]["task_closed"] is True  # last worktree → task closed (AC5)
+
+
+def test_remove_worktree_typed_error_envelope(tmp_path):
+    """An unknown task → {ok:false, error:{code:'TaskNotFound'}} (error-as-data)."""
+
+    async def run():
+        store = await Store.open(tmp_path / "state.db")
+        try:
+            non_repo = tmp_path / "plain"
+            non_repo.mkdir()
+            return await remove_worktree(
+                RemoveWorktreeIn(task_id="ghost", repo=str(non_repo)), deps=_deps(store)
+            )
+        finally:
+            await store.close()
+
+    env = asyncio.run(run())
+    assert env["ok"] is False
+    assert env["data"] is None
+    assert env["error"]["code"] == "TaskNotFound"

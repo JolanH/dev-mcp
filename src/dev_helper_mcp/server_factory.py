@@ -39,7 +39,7 @@ from .middleware import OriginValidationMiddleware
 from .store import Store
 from .tools import handlers
 from .tools.handlers import ToolDeps
-from .tools.models import CreateTaskIn
+from .tools.models import CreateTaskIn, ListWorktreesIn, RemoveWorktreeIn
 from .util import now_iso
 
 logger = logging.getLogger(__name__)
@@ -57,10 +57,12 @@ class _DepsHolder:
 
 
 def build_mcp(holder: _DepsHolder) -> FastMCP:
-    """Build the FastMCP server with the ``ping`` and ``create_task`` tools.
+    """Build the FastMCP server with the ``ping``, ``create_task``, ``list_worktrees``
+    and ``remove_worktree`` tools.
 
-    ``holder.deps`` is populated later by the app lifespan; the ``create_task``
-    closure reads it at call time.
+    ``holder.deps`` is populated later by the app lifespan; each tool closure reads it
+    at call time (returning a clean ``server not ready`` envelope in the startup/
+    teardown window).
     """
     mcp = FastMCP(APP_NAME)
 
@@ -92,6 +94,49 @@ def build_mcp(holder: _DepsHolder) -> FastMCP:
             task_name=task_name, description=description, repos=repos, base_ref=base_ref
         )
         return await handlers.create_task(inp, deps=deps)
+
+    @mcp.tool()
+    async def list_worktrees(repo: str | None = None, task_id: str | None = None) -> dict:
+        """List worktrees across tracked repos, derived live from git (not a cache).
+
+        Optional ``repo`` / ``task_id`` filters narrow the result. Each entry is
+        ``{repo_path, worktree_path, branch, task_id, status, orphaned}``. Returns the
+        ``{ok, data, error}`` envelope.
+        """
+        deps = holder.deps
+        if deps is None:
+            return {"ok": False, "data": None, "error": Internal("server not ready").as_dict()}
+
+        inp = ListWorktreesIn(repo=repo, task_id=task_id)
+        return await handlers.list_worktrees(inp, deps=deps)
+
+    @mcp.tool()
+    async def remove_worktree(
+        task_id: str,
+        repo: str,
+        delete_branch: bool = False,
+        force: bool = False,
+        force_unmerged_branch: bool = False,
+    ) -> dict:
+        """Remove one task's worktree in ``repo``, guarded (other repos unaffected).
+
+        ``force`` overrides the dirty/locked worktree guard; ``delete_branch`` also
+        deletes the ``agent/<task>`` branch, with ``force_unmerged_branch`` overriding
+        the unmerged-branch guard. Removing the task's last worktree closes the task.
+        Returns the ``{ok, data, error}`` envelope.
+        """
+        deps = holder.deps
+        if deps is None:
+            return {"ok": False, "data": None, "error": Internal("server not ready").as_dict()}
+
+        inp = RemoveWorktreeIn(
+            task_id=task_id,
+            repo=repo,
+            delete_branch=delete_branch,
+            force=force,
+            force_unmerged_branch=force_unmerged_branch,
+        )
+        return await handlers.remove_worktree(inp, deps=deps)
 
     # Serve the streamable-HTTP endpoint at /mcp directly so a bare /mcp resolves
     # with no trailing-slash 307 redirect (see module docstring).

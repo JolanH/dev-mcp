@@ -11,12 +11,12 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from ..core import tasks
+from ..core import tasks, worktrees
 from ..errors import DevHelperError, Internal
 from ..git.repo_lock import RepoLockRegistry
 from ..git.runner import GitRunner
 from ..store import Store
-from .models import CreateTaskIn
+from .models import CreateTaskIn, ListWorktreesIn, RemoveWorktreeIn
 
 logger = logging.getLogger(__name__)
 
@@ -52,4 +52,42 @@ async def create_task(inp: CreateTaskIn, *, deps: ToolDeps) -> dict:
         return {"ok": False, "data": None, "error": exc.as_dict()}
     except Exception:  # noqa: BLE001 — never leak a stack trace through the tool
         logger.exception("unexpected error in create_task")
+        return {"ok": False, "data": None, "error": Internal("unexpected error").as_dict()}
+
+
+async def list_worktrees(inp: ListWorktreesIn, *, deps: ToolDeps) -> dict:
+    """Handle ``list_worktrees``: live-derive the worktree view, return the envelope."""
+    try:
+        data = await worktrees.list_worktrees(
+            repo=inp.repo,
+            task_id=inp.task_id,
+            runner=deps.runner,
+            store=deps.store,
+        )
+        return {"ok": True, "data": data, "error": None}
+    except DevHelperError as exc:
+        return {"ok": False, "data": None, "error": exc.as_dict()}
+    except Exception:  # noqa: BLE001 — never leak a stack trace through the tool
+        logger.exception("unexpected error in list_worktrees")
+        return {"ok": False, "data": None, "error": Internal("unexpected error").as_dict()}
+
+
+async def remove_worktree(inp: RemoveWorktreeIn, *, deps: ToolDeps) -> dict:
+    """Handle ``remove_worktree``: run the guarded removal, return the envelope."""
+    try:
+        data = await worktrees.remove_worktree(
+            inp.task_id,
+            inp.repo,
+            delete_branch=inp.delete_branch,
+            force=inp.force,
+            force_unmerged_branch=inp.force_unmerged_branch,
+            runner=deps.runner,
+            locks=deps.locks,
+            store=deps.store,
+        )
+        return {"ok": True, "data": data, "error": None}
+    except DevHelperError as exc:
+        return {"ok": False, "data": None, "error": exc.as_dict()}
+    except Exception:  # noqa: BLE001 — never leak a stack trace through the tool
+        logger.exception("unexpected error in remove_worktree")
         return {"ok": False, "data": None, "error": Internal("unexpected error").as_dict()}
