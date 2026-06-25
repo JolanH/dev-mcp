@@ -22,6 +22,7 @@ All three invariants still hold: no 307, ``/mcp`` reachable, lifespan wrapped,
 Origin middleware outermost.
 """
 
+import asyncio
 import contextlib
 import logging
 from collections.abc import AsyncIterator
@@ -31,7 +32,8 @@ from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.routing import Mount
 
-from .config import APP_NAME, MCP_PATH
+from .cache import Cache, run_refresher
+from .config import APP_NAME, CACHE_REFRESH_INTERVAL, MCP_PATH
 from .errors import Internal
 from .git.repo_lock import RepoLockRegistry
 from .git.runner import GitRunner
@@ -199,10 +201,23 @@ def create_app(port: int) -> Starlette:
     async def lifespan(app: Starlette) -> AsyncIterator[None]:
         # Build the shared tool deps INSIDE the running loop (asyncio primitives +
         # the open aiosqlite connection belong to the serving loop), then expose
-        # them via the holder the tool closures captured.
+        # them via the holder the tool closures captured. ONE GitRunner per app —
+        # its pools are the shared concurrency limiter — handed to BOTH the deps and
+        # the Cache (a second runner would split the READ-pool cap).
         store = await Store.open()
-        holder.deps = ToolDeps(runner=GitRunner(), locks=RepoLockRegistry(), store=store)
+        runner = GitRunner()
+        cache = Cache(runner=runner, store=store)
+        holder.deps = ToolDeps(runner=runner, locks=RepoLockRegistry(), store=store, cache=cache)
+        # The warm-up refresh and the refresher task live INSIDE the try so the
+        # finally always runs: a startup-cancel (shutdown signal during warm-up, where
+        # a git read re-raises CancelledError) must still close the Store and cancel
+        # any launched refresher rather than leaking the open connection/task.
+        refresher: asyncio.Task[None] | None = None
         try:
+            # Warm the cache so /state (Story 2.3) is current the instant the server is
+            # up, not blank-until-first-tick.
+            await cache.refresh()
+            refresher = asyncio.create_task(run_refresher(cache, interval=CACHE_REFRESH_INTERVAL))
             # Load-bearing: run the mounted sub-app's lifespan so the StreamableHTTP
             # session manager starts. Without this, /mcp fails "Task group is not
             # initialized".
@@ -211,6 +226,12 @@ def create_app(port: int) -> Starlette:
                 yield
         finally:
             holder.deps = None
+            # Cancel the refresher BEFORE closing the store — the loop's refresh()
+            # reads the store; closing it first would hit a closed connection mid-tick.
+            if refresher is not None:
+                refresher.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await refresher
             await store.close()
 
     return Starlette(

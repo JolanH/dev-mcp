@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+from ..cache import Cache
 from ..core import tasks, worktrees
 from ..errors import DevHelperError, Internal
 from ..git.repo_lock import RepoLockRegistry
@@ -39,6 +40,7 @@ class ToolDeps:
     runner: GitRunner
     locks: RepoLockRegistry
     store: Store
+    cache: Cache
 
 
 async def create_task(inp: CreateTaskIn, *, deps: ToolDeps) -> dict:
@@ -53,6 +55,11 @@ async def create_task(inp: CreateTaskIn, *, deps: ToolDeps) -> dict:
             locks=deps.locks,
             store=deps.store,
         )
+        # Refresh the shared cache on the just-committed git-derived state BEFORE
+        # returning, so a tool never reports ok on stale state (AC2). refresh() is
+        # total — it cannot turn this successful mutation into a failure. The
+        # returned ``data`` is unchanged; the refresh is a side effect on the cache.
+        await deps.cache.refresh()
         return {"ok": True, "data": data, "error": None}
     except DevHelperError as exc:
         return {"ok": False, "data": None, "error": exc.as_dict()}
@@ -91,6 +98,8 @@ async def remove_worktree(inp: RemoveWorktreeIn, *, deps: ToolDeps) -> dict:
             locks=deps.locks,
             store=deps.store,
         )
+        # Refresh after the committed mutation, before returning (AC2). Total.
+        await deps.cache.refresh()
         return {"ok": True, "data": data, "error": None}
     except DevHelperError as exc:
         return {"ok": False, "data": None, "error": exc.as_dict()}
@@ -108,6 +117,8 @@ async def update_task(inp: UpdateTaskIn, *, deps: ToolDeps) -> dict:
             description=inp.description,
             store=deps.store,
         )
+        # Refresh after the committed mutation, before returning (AC2). Total.
+        await deps.cache.refresh()
         return {"ok": True, "data": data, "error": None}
     except DevHelperError as exc:
         return {"ok": False, "data": None, "error": exc.as_dict()}

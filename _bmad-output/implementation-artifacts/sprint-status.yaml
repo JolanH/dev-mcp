@@ -55,7 +55,7 @@ development_status:
   # Epic 2: Live multi-repo monitoring dashboard
   epic-2: in-progress
   2-1-derive-on-read-projection-pure-task-grouped: done
-  2-2-in-memory-cache-and-background-refresher: ready-for-dev
+  2-2-in-memory-cache-and-background-refresher: done
   2-3-read-only-state-endpoint: ready-for-dev
   2-4a-static-board-structure-status-encoding: ready-for-dev
   2-4b-live-poller-with-diff-and-patch-stable-render: ready-for-dev

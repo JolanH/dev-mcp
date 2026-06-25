@@ -43,6 +43,12 @@ GIT_MUTATION_TIMEOUT = 120.0
 #: Mutation pool concurrency.
 GIT_MUTATION_POOL_SIZE = 4
 
+#: Background cache-refresher tick period (seconds). The refresher rebuilds the
+#: in-memory derive-on-read view every interval; 2.0s keeps worst-case background
+#: staleness under the ≤3s freshness SLO (FR-9 / UX-DR6). This is the BACKGROUND
+#: tick — distinct from the dashboard *poll* interval (a 2.4b UI concern).
+CACHE_REFRESH_INTERVAL: float = 2.0
+
 #: Environment pinned on every git subprocess (merged over ``os.environ``):
 #: no credential prompts, no optional lock churn. Never run git via a shell.
 GIT_ENV = {"GIT_TERMINAL_PROMPT": "0", "GIT_OPTIONAL_LOCKS": "0"}

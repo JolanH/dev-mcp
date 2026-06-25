@@ -5,6 +5,7 @@ Drives the adapter handler directly with real injected deps (no server/port).
 
 import asyncio
 
+from dev_helper_mcp.cache import Cache
 from dev_helper_mcp.git.repo_lock import RepoLockRegistry
 from dev_helper_mcp.git.runner import GitRunner
 from dev_helper_mcp.store import Store
@@ -26,7 +27,14 @@ from dev_helper_mcp.tools.models import (
 
 
 def _deps(store):
-    return ToolDeps(runner=GitRunner(), locks=RepoLockRegistry(), store=store)
+    # One shared GitRunner for the deps AND the cache (one pool pair per app).
+    runner = GitRunner()
+    return ToolDeps(
+        runner=runner,
+        locks=RepoLockRegistry(),
+        store=store,
+        cache=Cache(runner=runner, store=store),
+    )
 
 
 def test_success_envelope(tmp_git_repo, tmp_path):
