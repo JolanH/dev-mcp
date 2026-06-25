@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-06-22T10:35:15
-last_updated: 2026-06-24
+last_updated: 2026-06-25
 project: dev-helper-mcp
 project_key: NOKEY
 tracking_system: file-system
@@ -54,12 +54,12 @@ development_status:
 
   # Epic 2: Live multi-repo monitoring dashboard
   epic-2: in-progress
-  2-1-derive-on-read-projection-pure-task-grouped: backlog
-  2-2-in-memory-cache-and-background-refresher: backlog
-  2-3-read-only-state-endpoint: backlog
-  2-4a-static-board-structure-status-encoding: backlog
-  2-4b-live-poller-with-diff-and-patch-stable-render: backlog
-  2-4c-freshness-degraded-and-empty-states: backlog
+  2-1-derive-on-read-projection-pure-task-grouped: done
+  2-2-in-memory-cache-and-background-refresher: ready-for-dev
+  2-3-read-only-state-endpoint: ready-for-dev
+  2-4a-static-board-structure-status-encoding: ready-for-dev
+  2-4b-live-poller-with-diff-and-patch-stable-render: ready-for-dev
+  2-4c-freshness-degraded-and-empty-states: ready-for-dev
   epic-2-retrospective: optional
 
   # Epic 3: Reliable global install & lifecycle
