@@ -49,6 +49,27 @@ GIT_MUTATION_POOL_SIZE = 4
 #: tick — distinct from the dashboard *poll* interval (a 2.4b UI concern).
 CACHE_REFRESH_INTERVAL: float = 2.0
 
+#: Dashboard live-poll interval (milliseconds) — the period the **browser** waits
+#: between ``fetch("/state")`` calls in the inlined poller (Story 2.4b). This is a
+#: distinct concern from ``CACHE_REFRESH_INTERVAL`` above: that is the SERVER tick
+#: that rebuilds the in-memory view; this is the CLIENT poll that re-reads it. With
+#: the 2.0s server tick they overlap to keep end-to-end staleness within the ≤3s
+#: freshness SLO for ≤15 repos (Decision A, operator-confirmed 2026-06-25: 1500ms).
+#: ``render_board`` injects this into the page so the poller reads it (no hardcoding
+#: in the JS). The poller re-arms with ``setTimeout`` AFTER each poll resolves — never
+#: ``setInterval`` — so a slow ``/state`` cannot stack overlapping in-flight requests.
+DASHBOARD_POLL_INTERVAL_MS: int = 1500
+
+#: Staleness factor (UX-DR6: "older than **2 × the poll interval**"). The effective
+#: stale threshold the dashboard uses is ``DASHBOARD_POLL_INTERVAL_MS *
+#: DASHBOARD_STALE_FACTOR`` (= 3000ms at the 1500ms poll). Staleness is computed
+#: CLIENT-SIDE (it is time-relative and must keep advancing between polls even when
+#: ``/state`` stops responding — Decision A); the server only injects this threshold
+#: onto the page (``data-stale-threshold-ms``) so the inlined poller reads it without
+#: hardcoding. ``render_board`` also honours it when a ``now_ms`` is INJECTED for a
+#: deterministic stale-at-load render (Decision B) — it never reads a clock itself.
+DASHBOARD_STALE_FACTOR: int = 2
+
 #: Environment pinned on every git subprocess (merged over ``os.environ``):
 #: no credential prompts, no optional lock churn. Never run git via a shell.
 GIT_ENV = {"GIT_TERMINAL_PROMPT": "0", "GIT_OPTIONAL_LOCKS": "0"}

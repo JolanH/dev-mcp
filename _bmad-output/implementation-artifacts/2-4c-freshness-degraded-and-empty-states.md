@@ -1,6 +1,10 @@
+---
+baseline_commit: d799578ff010566deb51500606b76d988c390b9d
+---
+
 # Story 2.4c: Freshness, degraded, and empty states
 
-Status: ready-for-dev
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -39,34 +43,49 @@ so that I'm never misled by a blank or silently-behind dashboard.
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1 — Freshness threshold tunable + the stale rule** (AC: 1)
-  - [ ] `config.py`: derive the stale threshold from the poll interval — `DASHBOARD_STALE_FACTOR = 2` (UX-DR6 "2 × poll interval"); the effective threshold is `DASHBOARD_POLL_INTERVAL_MS * DASHBOARD_STALE_FACTOR` (~3000ms). Comment it referencing UX-DR6.
-  - [ ] **The freshness/stale calc is CLIENT-SIDE JS** (it is time-relative and must update between polls without new data): a pure `staleness(generatedAtIso, nowMs, thresholdMs) -> {stale: bool, label: string}` in `poller.js`. `stale` when `nowMs - parse(generatedAtIso) > thresholdMs`. Label = relative age ("updated 1s ago" / "updated 7s ago"). **Pure + exported** for `node --test` (Decision A: client-side, node-tested — matches the browser-free strategy by unit-testing the time logic, not the DOM).
-  - [ ] The poller updates the `.fresh` stamp on every poll tick (and ideally on a lightweight timer between polls so the age keeps counting up — but **no style-mutating `requestAnimationFrame`**; a `setInterval` that only rewrites the stamp text/`data-stale` attr is data, not animation, and is UX-DR4-safe; keep it to the one stamp element). Toggle a `stale` class: grey under threshold, grey→amber over (DESIGN.md:109 `freshness-stamp`).
-- [ ] **Task 2 — Stale / git-unavailable board treatment (AC: 3)** — *never blank*
-  - [ ] **Whole-board stale:** when `staleness(...).stale` is true, render an explicit **"stale — git unavailable"** marker near the freshness stamp (UX-DR8) AND keep showing the last-known board (the snapshot in hand) — **never blank**. The board content is whatever `/state` last returned (2.2 keeps last-known on total git failure and ages `generated_at`, so the client infers staleness from age). The marker copy is exactly the UX-DR8 intent: last-known + "stale — git unavailable".
-  - [ ] **Per-repo degrade:** parse `warnings` for `repo_unavailable:<repo_path>` entries; for each, render **only that repo's `worktree-line`(s)** as **"unavailable / last-known"** (e.g. append a muted `· unavailable` marker or a `data-unavailable` attr + styling) while **all other repos render normally** (UX-DR8; 2.2 Decision B). A single slow repo never blanks or fails the board.
-  - [ ] This is BOTH a server-render concern (initial `render_board` must branch on `warnings`/age) AND a client concern (the poller re-applies it each tick via `patch`). Implement the **server render** branch (stdlib-parser-testable) and have the poller's `patch`/`renderCard` honor the same `warnings`/`repo_unavailable` logic (so a degrade that appears mid-session is patched in). Keep the parsing in one shared shape — a small `warningsIndex(warnings)` helper in JS, mirrored by a Python helper for the server render.
-- [ ] **Task 3 — Orphan disclosure (AC: 2)** — *demoted, collapsed, self-explaining*
-  - [ ] Extend `render_board` (2.4a) to populate the **orphan-disclosure**: a `<details class="fold">` BELOW the done-disclosure, **collapsed by default (no `open` attr)**, summary states the count (e.g. `1 orphaned annotation`), body lists each orphan as `<div class="o"><b>{branch}</b> — branch gone from git, note preserved here</div>` (DESIGN.md:108; EXPERIENCE.md:45; mock:109-111). Source the orphans from per-worktree `orphaned: true` AND/OR the `orphan_link:` warnings (use the warnings list — it carries `<task_id>@<repo>:<branch>` — as the authoritative orphan enumeration).
-  - [ ] **Both Done and orphan `<details>` are collapsed-by-default and NEVER auto-expanded** even when non-empty (UX-DR7; EXPERIENCE.md:45). The poller must preserve their open-state across polls (already guaranteed by 2.4b's diff-and-patch — do not toggle `open`).
-  - [ ] **Self-explaining summaries:** done = `✓ N done`; orphan = the plain count + (on expand) the "branch gone from git, note preserved here" line. No marketing, lowercase fragments (EXPERIENCE.md:37, 45).
-- [ ] **Task 4 — Empty states (AC: 4)** — *honest absence*
-  - [ ] **Empty column:** header shows the label + "0" and quiet empty space (no placeholder card) — UX-DR9. (2.4a already renders the header count; 2.4c adds the empty-column copy where required.)
-  - [ ] **Empty Blocked column** specifically reads **"Nothing needs you"** (the only column with affirmative empty copy — confirming "I'm clear" is a feature; EXPERIENCE.md:37, 64).
-  - [ ] **Fully empty board** (no tasks anywhere): a brief plain line **"No active tasks — create one with `create_task`"** (informative, not decorative). Note the backtick/code styling on `create_task`.
-  - [ ] **Zero done:** OMIT the done-disclosure entirely (no `<details>` when N=0) — UX-DR9/UX-DR13. (Contrast with 2.4a, which renders the disclosure when there ARE done tasks; 2.4c adds the zero-case omission.) Similarly, a zero-orphan state omits the orphan-disclosure.
-  - [ ] These are **server-render** branches (stdlib-parser-testable) AND mirrored in the poller so an emptying board shows the right copy live.
-- [ ] **Task 5 — Tests** (AC: 1, 2, 3, 4)
-  - [ ] **Freshness (UX-DR6) — `node --test` over `staleness(...)`:** age below `2×interval` → `{stale:false}`; above → `{stale:true}` + an amber label; boundary exactly at threshold (define inclusive/exclusive). Plus an optional server-render assertion: `render_board` with an old `generated_at` + an injected `now` (inject `now` for determinism, like 2.1's `generated_at`) emits the stale class; under → absent. (Decision B: if the server also renders an initial stale class, inject `now`; otherwise freshness is purely client/node-tested.)
-  - [ ] **Orphan + Done disclosures (UX-DR7) — HTML-output (stdlib parser, no `selectolax`):** given a payload with done tasks + `orphan_link:` warnings, both `<details>` exist below the board, **neither has `open`**, the orphan body has the self-explaining line, summaries show correct counts. Given zero done → no done `<details>`; zero orphan → no orphan `<details>` (AC4 overlap).
-  - [ ] **Degrade (UX-DR8) — HTML-output:** given a payload whose `warnings` include `repo_unavailable:/path/repoB`, the rendered board shows repoB's worktree line(s) marked "unavailable" while repoA's render normally (assert by parsing the specific `.wt`/`data-unavailable` nodes). Given a stale age (old `generated_at` + injected `now`), the "stale — git unavailable" marker text is present and the board is **not blank** (cards still rendered).
-  - [ ] **Empty states (UX-DR9) — HTML-output, one assert per copy string:** empty Blocked → "Nothing needs you"; empty Running/Review column → header + "0", no placeholder card; fully empty board → "No active tasks — create one with `create_task`"; zero done → no done-disclosure. Assert each exact copy string for the corresponding empty payload.
-  - [ ] **Static-lint stays green (UX-DR4/10):** the new stamp-updating `setInterval` rewrites only the freshness text/attr — assert no `requestAnimationFrame`, no CSS `transition`/`animation`/`@keyframes`/`scroll-behavior:smooth`, no external asset (extend 2.4a/2.4b's `test_dashboard_static_lint.py`). The stale color shift is a class swap, not a CSS transition.
-  - [ ] **Disclosure open-state preserved across a degrade/empty poll (UX-DR5/7 interplay):** a dep-free spy test (per 2.4b Decision D) that a poll which only changes freshness/warnings does NOT invoke `patch` on the disclosures / does NOT collapse an opened Done/orphan `<details>`.
-- [ ] **Task 6 — Gate green + seam confirmation** (AC: all)
-  - [ ] `render.py` gains degrade/empty/orphan branches (still pure, no `mcp`/`starlette`); `poller.js` gains `staleness`/`warningsIndex`/stamp-update; `config.py` gains `DASHBOARD_STALE_FACTOR`; core unchanged → `tests/test_adapter_seam.py` green.
-  - [ ] Full gate (manual): `uv run ruff check . && uv run ruff format --check . && uv run pytest -m "not slow"` **and** `node --test tests/js/` (now also covering `staleness`). **No new dependency** (stdlib HTML parsing; dep-free spy — no jsdom). No schema change, no git command, no `.githooks/pre-commit` edit. ⚠️ Run the gate yourself.
+- [x] **Task 1 — Freshness threshold tunable + the stale rule** (AC: 1)
+  - [x] `config.py`: derive the stale threshold from the poll interval — `DASHBOARD_STALE_FACTOR = 2` (UX-DR6 "2 × poll interval"); the effective threshold is `DASHBOARD_POLL_INTERVAL_MS * DASHBOARD_STALE_FACTOR` (~3000ms). Comment it referencing UX-DR6.
+  - [x] **The freshness/stale calc is CLIENT-SIDE JS** (it is time-relative and must update between polls without new data): a pure `staleness(generatedAtIso, nowMs, thresholdMs) -> {stale: bool, label: string}` in `poller.js`. `stale` when `nowMs - parse(generatedAtIso) > thresholdMs`. Label = relative age ("updated 1s ago" / "updated 7s ago"). **Pure + exported** for `node --test` (Decision A: client-side, node-tested — matches the browser-free strategy by unit-testing the time logic, not the DOM).
+  - [x] The poller updates the `.fresh` stamp on every poll tick (and ideally on a lightweight timer between polls so the age keeps counting up — but **no style-mutating `requestAnimationFrame`**; a `setInterval` that only rewrites the stamp text/`data-stale` attr is data, not animation, and is UX-DR4-safe; keep it to the one stamp element). Toggle a `stale` class: grey under threshold, grey→amber over (DESIGN.md:109 `freshness-stamp`).
+- [x] **Task 2 — Stale / git-unavailable board treatment (AC: 3)** — *never blank*
+  - [x] **Whole-board stale:** when `staleness(...).stale` is true, render an explicit **"stale — git unavailable"** marker near the freshness stamp (UX-DR8) AND keep showing the last-known board (the snapshot in hand) — **never blank**. The board content is whatever `/state` last returned (2.2 keeps last-known on total git failure and ages `generated_at`, so the client infers staleness from age). The marker copy is exactly the UX-DR8 intent: last-known + "stale — git unavailable".
+  - [x] **Per-repo degrade:** parse `warnings` for `repo_unavailable:<repo_path>` entries; for each, render **only that repo's `worktree-line`(s)** as **"unavailable / last-known"** (e.g. append a muted `· unavailable` marker or a `data-unavailable` attr + styling) while **all other repos render normally** (UX-DR8; 2.2 Decision B). A single slow repo never blanks or fails the board.
+  - [x] This is BOTH a server-render concern (initial `render_board` must branch on `warnings`/age) AND a client concern (the poller re-applies it each tick via `patch`). Implement the **server render** branch (stdlib-parser-testable) and have the poller's `patch`/`renderCard` honor the same `warnings`/`repo_unavailable` logic (so a degrade that appears mid-session is patched in). Keep the parsing in one shared shape — a small `warningsIndex(warnings)` helper in JS, mirrored by a Python helper for the server render.
+- [x] **Task 3 — Orphan disclosure (AC: 2)** — *demoted, collapsed, self-explaining*
+  - [x] Extend `render_board` (2.4a) to populate the **orphan-disclosure**: a `<details class="fold">` BELOW the done-disclosure, **collapsed by default (no `open` attr)**, summary states the count (e.g. `1 orphaned annotation`), body lists each orphan as `<div class="o"><b>{branch}</b> — branch gone from git, note preserved here</div>` (DESIGN.md:108; EXPERIENCE.md:45; mock:109-111). Source the orphans from per-worktree `orphaned: true` AND/OR the `orphan_link:` warnings (use the warnings list — it carries `<task_id>@<repo>:<branch>` — as the authoritative orphan enumeration).
+  - [x] **Both Done and orphan `<details>` are collapsed-by-default and NEVER auto-expanded** even when non-empty (UX-DR7; EXPERIENCE.md:45). The poller must preserve their open-state across polls (already guaranteed by 2.4b's diff-and-patch — do not toggle `open`).
+  - [x] **Self-explaining summaries:** done = `✓ N done`; orphan = the plain count + (on expand) the "branch gone from git, note preserved here" line. No marketing, lowercase fragments (EXPERIENCE.md:37, 45).
+- [x] **Task 4 — Empty states (AC: 4)** — *honest absence*
+  - [x] **Empty column:** header shows the label + "0" and quiet empty space (no placeholder card) — UX-DR9. (2.4a already renders the header count; 2.4c adds the empty-column copy where required.)
+  - [x] **Empty Blocked column** specifically reads **"Nothing needs you"** (the only column with affirmative empty copy — confirming "I'm clear" is a feature; EXPERIENCE.md:37, 64).
+  - [x] **Fully empty board** (no tasks anywhere): a brief plain line **"No active tasks — create one with `create_task`"** (informative, not decorative). Note the backtick/code styling on `create_task`.
+  - [x] **Zero done:** OMIT the done-disclosure entirely (no `<details>` when N=0) — UX-DR9/UX-DR13. (Contrast with 2.4a, which renders the disclosure when there ARE done tasks; 2.4c adds the zero-case omission.) Similarly, a zero-orphan state omits the orphan-disclosure.
+  - [x] These are **server-render** branches (stdlib-parser-testable) AND mirrored in the poller so an emptying board shows the right copy live.
+- [x] **Task 5 — Tests** (AC: 1, 2, 3, 4)
+  - [x] **Freshness (UX-DR6) — `node --test` over `staleness(...)`:** age below `2×interval` → `{stale:false}`; above → `{stale:true}` + an amber label; boundary exactly at threshold (define inclusive/exclusive). Plus an optional server-render assertion: `render_board` with an old `generated_at` + an injected `now` (inject `now` for determinism, like 2.1's `generated_at`) emits the stale class; under → absent. (Decision B: if the server also renders an initial stale class, inject `now`; otherwise freshness is purely client/node-tested.)
+  - [x] **Orphan + Done disclosures (UX-DR7) — HTML-output (stdlib parser, no `selectolax`):** given a payload with done tasks + `orphan_link:` warnings, both `<details>` exist below the board, **neither has `open`**, the orphan body has the self-explaining line, summaries show correct counts. Given zero done → no done `<details>`; zero orphan → no orphan `<details>` (AC4 overlap).
+  - [x] **Degrade (UX-DR8) — HTML-output:** given a payload whose `warnings` include `repo_unavailable:/path/repoB`, the rendered board shows repoB's worktree line(s) marked "unavailable" while repoA's render normally (assert by parsing the specific `.wt`/`data-unavailable` nodes). Given a stale age (old `generated_at` + injected `now`), the "stale — git unavailable" marker text is present and the board is **not blank** (cards still rendered).
+  - [x] **Empty states (UX-DR9) — HTML-output, one assert per copy string:** empty Blocked → "Nothing needs you"; empty Running/Review column → header + "0", no placeholder card; fully empty board → "No active tasks — create one with `create_task`"; zero done → no done-disclosure. Assert each exact copy string for the corresponding empty payload.
+  - [x] **Static-lint stays green (UX-DR4/10):** the new stamp-updating `setInterval` rewrites only the freshness text/attr — assert no `requestAnimationFrame`, no CSS `transition`/`animation`/`@keyframes`/`scroll-behavior:smooth`, no external asset (extend 2.4a/2.4b's `test_dashboard_static_lint.py`). The stale color shift is a class swap, not a CSS transition.
+  - [x] **Disclosure open-state preserved across a degrade/empty poll (UX-DR5/7 interplay):** a dep-free spy test (per 2.4b Decision D) that a poll which only changes freshness/warnings does NOT invoke `patch` on the disclosures / does NOT collapse an opened Done/orphan `<details>`.
+- [x] **Task 6 — Gate green + seam confirmation** (AC: all)
+  - [x] `render.py` gains degrade/empty/orphan branches (still pure, no `mcp`/`starlette`); `poller.js` gains `staleness`/`warningsIndex`/stamp-update; `config.py` gains `DASHBOARD_STALE_FACTOR`; core unchanged → `tests/test_adapter_seam.py` green.
+  - [x] Full gate (manual): `uv run ruff check . && uv run ruff format --check . && uv run pytest -m "not slow"` **and** `node --test tests/js/` (now also covering `staleness`). **No new dependency** (stdlib HTML parsing; dep-free spy — no jsdom). No schema change, no git command, no `.githooks/pre-commit` edit. ⚠️ Run the gate yourself.
+
+### Review Findings
+
+_Code review 2026-06-26 (3-layer adversarial: Blind Hunter, Edge Case Hunter, Acceptance Auditor). 1 patch, 0 decision-needed, 0 deferred, 7 dismissed as noise/false-positive._
+
+- [x] [Review][Patch] **HIGH — first task to complete on a zero-done board is dropped** [`src/dev_helper_mcp/dashboard/static/poller.js` `containerForStatus`/`reparent`/`addCard` + interplay with `render.py` zero-done omission] — 2.4c's AC4 change omits the `<details class="fold done">` element when the loaded snapshot has zero done tasks. The 2.4b poller's `containerForStatus(boardEl,"done")` returned `boardEl.querySelector(".fold.done .body")` → `null`; `reparent`/`addCard` then `el.remove()`/`return`, so a task moving to `done` (or a new done task) **vanished from the DOM** until a full reload, while the done pill still ticked to "1 done". Repro confirmed via DOM stub. **FIXED (2026-06-26):** added `ensureDoneFold(boardEl)` — `containerForStatus` now creates the done disclosure on demand (collapsed, never `open`, in the server's position before any orphan fold), and `updateCounts` removes it when the done count returns to 0 (matches the server's zero-done omission). 4 regression tests added to `tests/js/states_dom.test.mjs` (transition-to-done creates the fold; new done task creates it; last-done-leaves removes it; opened fold keeps its open-state). Gate re-run green: ruff + 261 pytest + 53 node.
+
+_Dismissed (recorded for traceability):_
+- `except ValueError, TypeError:` "Py2 syntax" (blind+auditor+edge) — VALID on Python 3.14 (PEP 758, no `as`); `py_compile`/import OK; the project's own `ruff format` (target py314) **enforces** the unparenthesized form (re-strips added parens). Toolchain output on the pinned runtime, not a defect.
+- `datetime.fromisoformat` rejecting the `Z` suffix (blind) — only on Python ≤3.10; project pins `>=3.14`.
+- `warningsIndex` returns a `set` (Py) vs an object-as-set (JS) (blind) — intentional language idiom; membership semantics + the split rules match.
+- `orphan_link` parse on a repo path containing `@`/`:` (blind+edge) — parses correctly for all real inputs: `task_id` is a clean slug (no `@`), `branch` is always `agent/<slug>` (no `:`); Python and JS split identically (no rendered-vs-patched divergence).
+- initial-state `<`-only JSON escape (blind) — sufficient to neutralize `</script>` breakout inside a `<script type="application/json">` raw-text block.
+- Freshness never ages if the embedded initial-state JSON is corrupt (edge) — that JSON is server-produced via `json.dumps(asdict(...))`; not a realistic state.
+- Fixed "stale — git unavailable" wording regardless of stale cause (auditor) — spec-correct: per 2.2 Decision B, only a total git failure ages `generated_at` past the threshold.
 
 ## Dev Notes
 
@@ -167,16 +186,78 @@ UX-DR7/8/9 are tested via **HTML-output assertions** (EXPERIENCE.md:102; parsed 
 
 ### Agent Model Used
 
-{{agent_model_name_version}}
+claude-opus-4-8 (Opus 4.8, 1M context)
 
 ### Debug Log References
 
+- **Static-lint trap (memory-confirmed):** the dashboard static-lint greps the WHOLE page
+  (incl. inlined poller JS comments) for forbidden tokens. My first pass put `transition`/
+  `animation` and the `create_task` example string in poller.js comments → 3 lint failures.
+  Reworded the comments (no `transition`/`animation`/mutating-tool tokens anywhere in the JS,
+  code or comments). Gate green after. (Also note: `grep` treats poller.js as binary due to
+  the UTF-8 em-dash/glyphs — use `grep -a` to search it.)
+
 ### Completion Notes List
 
+- **AC1 (UX-DR6 freshness):** `staleness(generatedAtIso, nowMs, thresholdMs)` is a PURE,
+  time-injected fn in `poller.js` (node-tested: below/over/exactly-at the threshold — chose
+  **exclusive** boundary, "exceeds" ⇒ strictly greater; unparseable/future-stamp totality).
+  Threshold = `DASHBOARD_POLL_INTERVAL_MS * DASHBOARD_STALE_FACTOR` (=3000ms), injected onto
+  the page as `data-stale-threshold-ms` (not hardcoded in JS). The server also renders the
+  stale-at-load class + marker when a `now_ms` is **injected** (Decision B, HTML-tested);
+  production `/` passes none → no clock read → client computes staleness live.
+- **Freshness ticking — no `setInterval` (deliberate):** Task 1 floated a stamp-ticking
+  `setInterval` as an *optional* ("ideally"). I took the gotcha's recommended simpler path:
+  `updateFreshness` rides the EXISTING `setTimeout` poll re-arm (runs on every tick incl. the
+  failure path, so a hung `/state` keeps aging the stamp into "stale — git unavailable"). This
+  keeps `setinterval` forbidden in the static-lint (no loosening) and is correct since the
+  stale threshold is 2× the poll interval (per-tick granularity is sufficient).
+- **AC3 (UX-DR8 degrade):** `warningsIndex` (pure, mirrored Python `_warnings_index`) splits
+  `repo_unavailable:<repo>` (transient → per-repo "unavailable / last-known" line, only that
+  repo) from `orphan_link:<task_id>@<repo>:<branch>` (genuinely-gone → orphan disclosure) —
+  the headline gotcha. `.wt` lines carry `data-repo` so the client re-applies the degrade by
+  repo; the board never blanks (last-known cards always render). No `stale` field added to the
+  frozen 2.1 snapshot — staleness is inferred from `generated_at` age.
+- **AC2 (UX-DR7 disclosures):** Done + orphan `<details>` render below the board, NEITHER with
+  `open` (never auto-expanded even when non-empty). The poller's `applyOrphans` never recreates
+  the `<details>` when it exists and never touches `open` — a DOM-stub test proves a user-opened
+  orphan disclosure survives a re-apply (same node object, open kept). A warnings-only poll yields
+  an empty `diff()` so `patch` never runs on the disclosures (diff-level test).
+- **AC4 (UX-DR9 empty states):** empty Blocked → "Nothing needs you"; empty Running/Review →
+  header+"0", no placeholder; fully-empty board → "No active tasks — create one with
+  `create_task`" (`<code>`-styled). The `create_task` copy lives ONLY in `render.py` — the
+  poller toggles a `hidden` attr (it must contain no mutating-tool name, per the static-lint),
+  so the empty copy is mirrored live without the string in the JS. Zero-done/zero-orphan omit
+  their disclosures entirely.
+- **Seam/scope:** `render.py` stays pure (only stdlib + `config`/`tokens`; `test_adapter_seam`
+  green). No core/store/projection/cache/`/state`/route change, no new endpoint/git path, no
+  schema change, no `.githooks/pre-commit` edit, **no new dependency** (stdlib HTML parse; the
+  JS DOM tests use a hand-rolled stub, no jsdom).
+- **Gate (manual, run):** `ruff check` ✅ · `ruff format --check` ✅ · `pytest -m "not slow"`
+  ✅ 261 passed · `node --test tests/js/` ✅ 49 passed.
+
 ### File List
+
+- `src/dev_helper_mcp/config.py` — MODIFIED: `DASHBOARD_STALE_FACTOR = 2` (UX-DR6 threshold).
+- `src/dev_helper_mcp/dashboard/render.py` — MODIFIED: `_warnings_index`, `_parse_iso_ms`,
+  `_staleness`, `_orphan_disclosure`, `_fresh_stamp`; per-repo "unavailable" lines + `data-repo`
+  in `_worktree_line`; empty-Blocked + fully-empty-board copy; zero-done/orphan omission; the
+  `now_ms`-injected stale-at-load render; `render_board(snapshot, *, now_ms=None)`; CSS for
+  `.fresh.stale`/`.stale-marker`/`.wt[data-unavailable]`/`.un`/`.fold .o`/`.empty`/`.empty-board`.
+- `src/dev_helper_mcp/dashboard/static/poller.js` — MODIFIED: pure `staleness` + `warningsIndex`;
+  DOM `updateFreshness`/`applyUnavailable`/`applyOrphans`/`applyEmptyStates`/`toggleHidden`;
+  `data-repo` on `buildWorktreeLine`; poll-loop re-apply (freshness on every tick); exports.
+- `tests/test_dashboard_states.py` — NEW: HTML-output asserts for AC1–4 (stdlib parser).
+- `tests/js/staleness.test.mjs` — NEW: `node --test` for pure `staleness` + `warningsIndex`.
+- `tests/js/states_dom.test.mjs` — NEW: dep-free DOM-stub tests for the live re-apply fns.
+- `tests/js/diff.test.mjs` — MODIFIED: warnings-only change ⇒ empty patch (disclosure-safe).
+- `tests/test_dashboard_static_lint.py` — MODIFIED: 2.4c asserts (class-swap not transition,
+  injected threshold, no new timer).
 
 ## Change Log
 
 | Date | Change |
 | --- | --- |
+| 2026-06-26 | Code review (3-layer adversarial). 1 HIGH found + fixed: zero-done board dropped the first task to complete (poller had no `.fold.done` to reparent into after 2.4c's zero-done omission) — added `ensureDoneFold` (create-on-demand + remove-when-empty) and 4 regression tests. 7 findings dismissed (notably the `except ValueError, TypeError:` "Py2 syntax" — valid on Python 3.14 per PEP 758, and ruff enforces it). Gate green: ruff + 261 pytest + 53 node. Status → done. |
+| 2026-06-26 | Story 2.4c implemented (status → review). Client-side `staleness()` + `warningsIndex()` (node-tested, pure); freshness rides the existing poll-tick (no `setInterval`); server `render_board` gains the stale-at-load marker (injected `now_ms`), per-repo "unavailable / last-known" lines (distinct from orphan disclosure), the collapsed-never-`open` orphan disclosure, empty-Blocked "Nothing needs you", fully-empty-board create-one line, and zero-done/orphan omission. `config.DASHBOARD_STALE_FACTOR=2`. Live degrade/orphan/empty/freshness re-applied each tick (idempotent, disclosure-open-state preserved). No core/cache/projection/`/state`/schema/git/hook change; no new dep. Gate green: ruff + 261 pytest + 49 node. |
 | 2026-06-25 | Story 2.4c drafted (ready-for-dev): freshness/degraded/empty states — client-side `staleness()` (node-tested) + stale "git unavailable" marker (never blank); per-repo "unavailable" lines from `repo_unavailable:` warnings (distinct from `orphan_link:` orphans); orphan-disclosure (collapsed, never auto-expanded, self-explaining); empty-state copy ("Nothing needs you", "No active tasks — create one with `create_task`") + zero-done/orphan disclosure omission. Consumes 2.1/2.2 degrade signals; produces no new endpoint/cache change. Hard prerequisite: 2.1–2.4b implemented first. Decisions operator-confirmed: A freshness client-side + node-tested, B degrade/empty/orphan server-rendered (**stdlib HTML parser**) + freshness client. Gotchas flagged: repo_unavailable vs orphan_link distinction, no `stale` field on the frozen snapshot, disclosures never auto-expand, and that pre-commit test enforcement is intentionally off (gate is manual). |

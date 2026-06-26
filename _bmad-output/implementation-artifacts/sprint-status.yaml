@@ -58,8 +58,8 @@ development_status:
   2-2-in-memory-cache-and-background-refresher: done
   2-3-read-only-state-endpoint: done
   2-4a-static-board-structure-status-encoding: done
-  2-4b-live-poller-with-diff-and-patch-stable-render: ready-for-dev
-  2-4c-freshness-degraded-and-empty-states: ready-for-dev
+  2-4b-live-poller-with-diff-and-patch-stable-render: done
+  2-4c-freshness-degraded-and-empty-states: done
   epic-2-retrospective: optional
 
   # Epic 3: Reliable global install & lifecycle
