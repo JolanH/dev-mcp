@@ -34,6 +34,7 @@ from starlette.routing import Mount
 
 from .cache import Cache, run_refresher
 from .config import APP_NAME, CACHE_REFRESH_INTERVAL, MCP_PATH
+from .dashboard.routes import board_route, state_route
 from .errors import Internal
 from .git.repo_lock import RepoLockRegistry
 from .git.runner import GitRunner
@@ -235,7 +236,21 @@ def create_app(port: int) -> Starlette:
             await store.close()
 
     return Starlette(
-        routes=[Mount("/", app=mcp_app)],
+        # Route ORDER is load-bearing. Mount("/") is a catch-all that owns the whole
+        # URL space (the Story 1.1 no-307 wiring: MCP served at streamable_http_path
+        # "/mcp" mounted at "/"). Starlette matches routes top-to-bottom and returns
+        # the first match, so the explicit /state route MUST precede the Mount or it
+        # is shadowed and 404s. This resolves deferred-work.md's "Mount('/') shadows
+        # future routes" item via route ordering (the lowest-risk of its three
+        # options); /mcp still falls through to the Mount, preserving AC2-of-1.1.
+        # Do NOT "tidy" this order. The explicit Route("/") board (Story 2.4a) is also
+        # listed before the Mount: "/" resolves to the board, "/mcp" still falls through
+        # to the MCP app with no 307.
+        routes=[
+            state_route(holder),  # explicit GET /state → wins
+            board_route(holder),  # explicit GET / board → wins over the catch-all
+            Mount("/", app=mcp_app),  # catch-all (keeps /mcp working) → matched last
+        ],
         middleware=[Middleware(OriginValidationMiddleware, port=port)],
         lifespan=lifespan,
     )

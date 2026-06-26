@@ -1,6 +1,10 @@
+---
+baseline_commit: f25615be6e7e2b051ddcef54550d799bbece950a
+---
+
 # Story 2.3: Read-only `/state` endpoint
 
-Status: ready-for-dev
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -36,20 +40,20 @@ so that I can poll current state cheaply and safely without triggering any git w
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1 — Create the `dashboard/` adapter package** (AC: 1)
-  - [ ] `src/dev_helper_mcp/dashboard/__init__.py` (empty package marker). This is the architecture's `dashboard/` package (adapter layer; FR-8–10, architecture.md:768, 793, 826). Story 2.4a/b/c add the HTML board + JS to this same package; 2.3 adds **only** `/state`.
-  - [ ] `src/dev_helper_mcp/dashboard/routes.py` (NEW, adapter — MAY import `starlette`). It is the **only** new file that touches the SDK in this story. It is NOT in `tests/test_adapter_seam.py`'s `SEAM_MODULES` (that scan covers `core/`, `git/`, `store`, `projection`, `cache` — `dashboard/` is adapter, allowed SDK), so importing `starlette` here is correct, not a violation.
-- [ ] **Task 2 — Serialize the snapshot (snake_case, pure)** (AC: 1)
-  - [ ] `dataclasses.asdict(snapshot)` recurses the frozen `CacheSnapshot` → nested snake_case `dict` (tuples → lists under `json.dumps`). The field names ARE the contract (Invariant 3) — **no rename, no camelCase, no translation layer** (project-context.md:49). Do NOT hand-roll a serializer that could drift from 2.1's shape; `asdict` is the single transform.
-  - [ ] Keep this a one-liner inside the route handler — there is no separate "serializer" module to build (anti-scope-creep). The dict from `asdict` is handed straight to `JSONResponse`.
-- [ ] **Task 3 — Implement the `/state` GET handler** (AC: 1, 3)
-  - [ ] In `dashboard/routes.py`, expose a **factory** `def state_route(holder: _DepsHolder) -> Route:` (or `make_state_endpoint(holder) -> callable`) that closes over the same `_DepsHolder` the tool closures capture — that is how the route reaches the loop-bound `Cache` (`holder.deps.cache.current`). Mirror the existing closure-over-holder pattern in `server_factory.build_mcp` (server_factory.py:64-185).
-  - [ ] Handler: `async def state(request: Request) -> JSONResponse:` — read `deps = holder.deps`; **guard the startup/teardown window**: if `deps is None` (or, defensively, `deps.cache is None`) return `JSONResponse({"detail": "server not ready"}, status_code=503)` (Decision A). Otherwise `snap = deps.cache.current` (by-ref, no await, **no git, no lock**) → `return JSONResponse(dataclasses.asdict(snap))`.
-  - [ ] **Methods = `["GET"]` only.** A non-GET (`POST`/`PUT`/`DELETE`) to `/state` must yield Starlette's automatic `405 Method Not Allowed` — this is part of the read-only guarantee (AC3). Do not add any other method.
-  - [ ] **No git, no DB, no `await` on I/O.** The handler does a single in-memory ref read. If you find yourself importing `GitRunner`/`Store`/`run_git` here, stop — that violates "`/state` never shells out on a poll" (Invariant; architecture.md:358, 811-812).
-- [ ] **Task 4 — Wire the route so it WINS over the catch-all MCP mount** (AC: 1) — *the load-bearing wiring fix*
-  - [ ] **The problem (deferred-work.md, flagged FOR THIS STORY):** `server_factory.create_app` currently mounts the MCP sub-app at `Mount("/", app=mcp_app)` (server_factory.py:217), which owns the **entire** URL space — any sibling route added naively is unreachable. Epic 2's `/state` must revisit this. (deferred-work.md "Deferred from story-1-1 → `Mount('/', app=mcp_app)` shadows future routes … deferred to Epic 2.")
-  - [ ] **The fix (route ordering — the lowest-risk of the three options):** Starlette evaluates `routes` in order and returns the first match, so list the explicit `Route("/state", …)` **before** the catch-all `Mount("/", app=mcp_app)`:
+- [x] **Task 1 — Create the `dashboard/` adapter package** (AC: 1)
+  - [x] `src/dev_helper_mcp/dashboard/__init__.py` (empty package marker). This is the architecture's `dashboard/` package (adapter layer; FR-8–10, architecture.md:768, 793, 826). Story 2.4a/b/c add the HTML board + JS to this same package; 2.3 adds **only** `/state`.
+  - [x] `src/dev_helper_mcp/dashboard/routes.py` (NEW, adapter — MAY import `starlette`). It is the **only** new file that touches the SDK in this story. It is NOT in `tests/test_adapter_seam.py`'s `SEAM_MODULES` (that scan covers `core/`, `git/`, `store`, `projection`, `cache` — `dashboard/` is adapter, allowed SDK), so importing `starlette` here is correct, not a violation.
+- [x] **Task 2 — Serialize the snapshot (snake_case, pure)** (AC: 1)
+  - [x] `dataclasses.asdict(snapshot)` recurses the frozen `CacheSnapshot` → nested snake_case `dict` (tuples → lists under `json.dumps`). The field names ARE the contract (Invariant 3) — **no rename, no camelCase, no translation layer** (project-context.md:49). Do NOT hand-roll a serializer that could drift from 2.1's shape; `asdict` is the single transform.
+  - [x] Keep this a one-liner inside the route handler — there is no separate "serializer" module to build (anti-scope-creep). The dict from `asdict` is handed straight to `JSONResponse`.
+- [x] **Task 3 — Implement the `/state` GET handler** (AC: 1, 3)
+  - [x] In `dashboard/routes.py`, expose a **factory** `def state_route(holder: _DepsHolder) -> Route:` (or `make_state_endpoint(holder) -> callable`) that closes over the same `_DepsHolder` the tool closures capture — that is how the route reaches the loop-bound `Cache` (`holder.deps.cache.current`). Mirror the existing closure-over-holder pattern in `server_factory.build_mcp` (server_factory.py:64-185).
+  - [x] Handler: `async def state(request: Request) -> JSONResponse:` — read `deps = holder.deps`; **guard the startup/teardown window**: if `deps is None` (or, defensively, `deps.cache is None`) return `JSONResponse({"detail": "server not ready"}, status_code=503)` (Decision A). Otherwise `snap = deps.cache.current` (by-ref, no await, **no git, no lock**) → `return JSONResponse(dataclasses.asdict(snap))`.
+  - [x] **Methods = `["GET"]` only.** A non-GET (`POST`/`PUT`/`DELETE`) to `/state` is rejected without mutation. *Implementation note:* the literal "automatic 405" assumption does not hold while the catch-all `Mount("/")` sits behind the route — Starlette's `Route(methods=["GET"])` returns only a **partial** match for non-GET, and the Mount **fully** matches and short-circuits, so a non-GET falls through to the MCP app and is rejected there (**404**, not 405). No other method was added; the read-only guarantee (no mutating action at `/state`) holds either way, and the AC3-binding criterion ("no mutating route or action") is satisfied. See the route-table assertion (the authoritative read-only proof) and the documented test.
+  - [x] **No git, no DB, no `await` on I/O.** The handler does a single in-memory ref read. If you find yourself importing `GitRunner`/`Store`/`run_git` here, stop — that violates "`/state` never shells out on a poll" (Invariant; architecture.md:358, 811-812).
+- [x] **Task 4 — Wire the route so it WINS over the catch-all MCP mount** (AC: 1) — *the load-bearing wiring fix*
+  - [x] **The problem (deferred-work.md, flagged FOR THIS STORY):** `server_factory.create_app` currently mounts the MCP sub-app at `Mount("/", app=mcp_app)` (server_factory.py:217), which owns the **entire** URL space — any sibling route added naively is unreachable. Epic 2's `/state` must revisit this. (deferred-work.md "Deferred from story-1-1 → `Mount('/', app=mcp_app)` shadows future routes … deferred to Epic 2.")
+  - [x] **The fix (route ordering — the lowest-risk of the three options):** Starlette evaluates `routes` in order and returns the first match, so list the explicit `Route("/state", …)` **before** the catch-all `Mount("/", app=mcp_app)`:
     ```python
     routes=[
         state_route(holder),          # explicit, matched first → wins
@@ -57,20 +61,20 @@ so that I can poll current state cheaply and safely without triggering any git w
     ]
     ```
     `/mcp` still resolves through the Mount (it is not `/state`), so AC2-of-1.1 (no 307, handshake) is preserved. Verify the existing `tests/test_server_factory.py` (`/mcp` no-307, lifespan starts session mgr) stays green.
-  - [ ] `holder` already exists in `create_app` (server_factory.py:194). Pass the **same** `holder` instance into `state_route(holder)` so the route and the tool closures share one deps source. Do not create a second holder.
-  - [ ] **Do NOT** register `/state` *inside* the MCP sub-app, and do NOT move MCP to a sub-path — both are heavier than ordering and risk re-introducing the 307. Route-ordering is the chosen option; record why in a code comment referencing the deferred-work item.
-- [ ] **Task 5 — Confirm Origin middleware already covers `/state` (no new code)** (AC: 2)
-  - [ ] `OriginValidationMiddleware` is the **outermost parent-app middleware** (server_factory.py:218), so it runs on **every** request before route dispatch — `/state` is covered automatically the moment the route exists. **Write no new middleware.** (middleware.py:35-49: present+non-allowlisted Origin → 403; absent → allow; allowlisted → allow.)
-  - [ ] Add a `/state` row to the Origin matrix test (Task 6) — the *coverage* is free; the *proof* is the new assertion.
-- [ ] **Task 6 — Tests: `tests/test_dashboard_state.py`** (AC: 1, 2, 3)
-  - [ ] Use the **in-process `httpx.ASGITransport`** harness (the `asgi_client_factory`/equivalent in conftest.py), base URL `http://127.0.0.1:<port>` (NOT httpx's default `testserver`, or FastMCP host-validation 421s — project-context.md:75), and **wrap the body in `async with app.router.lifespan_context(app):`** (ASGITransport does NOT auto-run the lifespan — project-context.md:73). Drive async via `asyncio.run()` (no `pytest-asyncio`).
-  - [ ] **AC1 — shape + by-ref + no-git:** `GET /state` → 200; body is JSON with `generated_at` (str) + `tasks` (list) + `warnings` (list); all keys snake_case; the payload equals `dataclasses.asdict(holder.deps.cache.current)` at call time. After a `create_task` against a `tmp_git_repo` (which 2.2's post-mutation refresh updates the cache), `GET /state` reflects the new task — proving it reads the live cache, not a stale constant. **Assert no git is spawned on the GET** (e.g. the project-repo guard stays green AND, optionally, a spy/patched `GitRunner.run_git` is never called during the bare `GET /state`).
-  - [ ] **AC2 — Origin matrix on `/state`:** `GET /state` with a non-allowlisted `Origin` header → 403; with an **absent** `Origin` → 200; with an allowlisted `Origin` (`http://127.0.0.1:<port>`) → 200. (Mirror the existing `tests/test_middleware_origin.py` matrix; add `/state` as a target. Same outermost middleware as `/mcp`.)
-  - [ ] **AC3 — read-only:** `POST /state` (and/or `DELETE`) → 405; the served dashboard interface exposes no mutating route. Assert the route table: the parent app's routes are exactly `[Route("/state", GET), Mount("/")]` — there is no dashboard route that creates/modifies/removes a task or worktree. (The MCP `/mcp` tool surface is the *agent* API, deliberately separate from the *dashboard* interface this AC governs.)
-  - [ ] **503 startup/teardown window (Decision A):** with `holder.deps` forced `None`, `GET /state` → 503 with a JSON body (not a stack trace, not a blank 500). Keeps the poller resilient during the brief deps-null window.
-- [ ] **Task 7 — Gate green + seam confirmation** (AC: all)
-  - [ ] `dashboard/routes.py` is adapter (imports `starlette`) and is **not** in `SEAM_MODULES`; `projection.py`/`cache.py` are **unchanged**, so `tests/test_adapter_seam.py` stays green.
-  - [ ] Full gate: `uv run ruff check . && uv run ruff format --check . && uv run pytest -m "not slow"`. **No new dependency** (stdlib `dataclasses` + already-present `starlette`/`httpx`). No schema change, no migration, no new git command, no HTML/JS (that is 2.4a+). ⚠️ Run the gate yourself — pre-commit test enforcement is intentionally off (see gotcha).
+  - [x] `holder` already exists in `create_app` (server_factory.py:194). Pass the **same** `holder` instance into `state_route(holder)` so the route and the tool closures share one deps source. Do not create a second holder.
+  - [x] **Do NOT** register `/state` *inside* the MCP sub-app, and do NOT move MCP to a sub-path — both are heavier than ordering and risk re-introducing the 307. Route-ordering is the chosen option; record why in a code comment referencing the deferred-work item.
+- [x] **Task 5 — Confirm Origin middleware already covers `/state` (no new code)** (AC: 2)
+  - [x] `OriginValidationMiddleware` is the **outermost parent-app middleware** (server_factory.py:218), so it runs on **every** request before route dispatch — `/state` is covered automatically the moment the route exists. **Write no new middleware.** (middleware.py:35-49: present+non-allowlisted Origin → 403; absent → allow; allowlisted → allow.)
+  - [x] Add a `/state` row to the Origin matrix test (Task 6) — the *coverage* is free; the *proof* is the new assertion.
+- [x] **Task 6 — Tests: `tests/test_dashboard_state.py`** (AC: 1, 2, 3)
+  - [x] Use the **in-process `httpx.ASGITransport`** harness (the `asgi_client_factory`/equivalent in conftest.py), base URL `http://127.0.0.1:<port>` (NOT httpx's default `testserver`, or FastMCP host-validation 421s — project-context.md:75), and **wrap the body in `async with app.router.lifespan_context(app):`** (ASGITransport does NOT auto-run the lifespan — project-context.md:73). Drive async via `asyncio.run()` (no `pytest-asyncio`).
+  - [x] **AC1 — shape + by-ref + no-git:** `GET /state` → 200; body is JSON with `generated_at` (str) + `tasks` (list) + `warnings` (list); all keys snake_case; the payload equals `dataclasses.asdict(holder.deps.cache.current)` at call time. After a `create_task` against a `tmp_git_repo` (which 2.2's post-mutation refresh updates the cache), `GET /state` reflects the new task — proving it reads the live cache, not a stale constant. **Assert no git is spawned on the GET** (spy on `GitRunner.run_git` — zero calls during the bare `GET /state` — AND the project-repo guard stays green).
+  - [x] **AC2 — Origin matrix on `/state`:** `GET /state` with a non-allowlisted `Origin` header → 403; with an **absent** `Origin` → 200/allow; with an allowlisted `Origin` (`http://127.0.0.1:<port>`) → allow. (Added `/state` to the existing `tests/test_middleware_origin.py` matrix `ROUTES`. Same outermost middleware as `/mcp`.)
+  - [x] **AC3 — read-only:** non-GET (`POST`/`PUT`/`DELETE`) → rejected without mutation (404 via the catch-all Mount fallthrough — see Task 3 note); the served dashboard interface exposes no mutating route. Assert the route table: the parent app's routes are exactly `[Route("/state", GET), Mount("/")]` — there is no dashboard route that creates/modifies/removes a task or worktree. (The MCP `/mcp` tool surface is the *agent* API, deliberately separate from the *dashboard* interface this AC governs.)
+  - [x] **503 startup/teardown window (Decision A):** with `holder.deps` `None` (lifespan not entered), `GET /state` → 503 with a JSON body `{"detail": "server not ready"}` (not a stack trace, not a blank 500). Keeps the poller resilient during the brief deps-null window.
+- [x] **Task 7 — Gate green + seam confirmation** (AC: all)
+  - [x] `dashboard/routes.py` is adapter (imports `starlette`) and is **not** in `SEAM_MODULES`; `projection.py`/`cache.py` are **unchanged**, so `tests/test_adapter_seam.py` stays green (verified passing).
+  - [x] Full gate: `uv run ruff check . && uv run ruff format --check . && uv run pytest -m "not slow"` — **209 passed, 5 deselected (slow); ruff check + format clean.** **No new dependency** (stdlib `dataclasses` + already-present `starlette`/`httpx`). No schema change, no migration, no new git command, no HTML/JS (that is 2.4a+). Gate run manually (pre-commit test enforcement is intentionally off).
 
 ## Dev Notes
 
@@ -171,16 +175,41 @@ The single non-obvious task is Task 4. The `Mount("/", app=mcp_app)` from Story 
 
 ### Agent Model Used
 
-{{agent_model_name_version}}
+claude-opus-4-8 (Opus 4.8, 1M context) — via the BMad dev-story workflow.
 
 ### Debug Log References
 
+- Full manual gate: `uv run ruff check .` (All checks passed) + `uv run ruff format --check .` (44 files formatted) + `uv run pytest -m "not slow"` → **209 passed, 5 deselected** in ~114s.
+- Targeted: `tests/test_dashboard_state.py` (5) + `tests/test_middleware_origin.py` (9 incl. new `/state` rows) + `tests/test_server_factory.py` (regression, no-307) + `tests/test_adapter_seam.py` — all green.
+
 ### Completion Notes List
 
+- **All 3 ACs satisfied.** `/state` serves `dataclasses.asdict(Cache.current)` as snake_case JSON (AC1), guarded by the existing outermost Origin middleware with a new `/state` matrix row (AC2), and is read-only — non-GET is rejected without mutation and the route table exposes no mutating dashboard route (AC3). Decision A 503 deps-null window covered.
+- **Route-shadowing fix (Task 4) landed via route ordering.** `state_route(holder)` is listed **before** the catch-all `Mount("/", app=mcp_app)` in `create_app`, sharing the **same** `holder` instance as the tool closures. `/mcp` still resolves through the Mount with no 307 (existing `test_server_factory.py` stays green). A load-bearing comment referencing deferred-work.md warns against "tidying" the order.
+- **⚠️ Discovery — non-GET yields 404, not the guidance's "automatic 405".** With `methods=["GET"]`, Starlette 1.3.1 returns only a *partial* match for POST/PUT/DELETE on `/state`; the catch-all `Mount("/")` behind it returns a *full* match and short-circuits, so a non-GET falls through to the MCP app → **404**. The "automatic 405" in Task 3/Task 6 guidance rested on a routing assumption the implementation disproved (the same `Mount("/")` shadowing Task 4 fixes for GET only). I honored the explicit "methods=['GET'] only, do not add any other method" instruction rather than hand-rolling a 405, and the **binding AC3 criterion** ("no mutating route or action") is fully met — a non-GET to `/state` mutates nothing (proven by the route-table assertion + the 404/405 rejection test). This is a "reality differs from pseudo-code" case per project-context.md.
+- **No git on the poll path (Invariant 4) is asserted**, not just claimed: a spy on `GitRunner.run_git` records zero calls during the bare `GET /state`, and the test also drives a `create_task` (against `tmp_git_repo` only) to prove `/state` reflects the live, post-mutation cache.
+- **Scope held exactly.** No HTML/CSS/JS, no `/` index, no change to `cache.py`/`projection.py` (verified absent from the diff), no new middleware, no new dependency, no schema/migration. `dataclasses.asdict` at the route boundary is the whole transform.
+- **Circular-import avoidance:** `dashboard/routes.py` imports `_DepsHolder` only under `TYPE_CHECKING` (server_factory imports the routes module at runtime).
+
 ### File List
+
+- **NEW** `src/dev_helper_mcp/dashboard/__init__.py` — dashboard adapter package marker.
+- **NEW** `src/dev_helper_mcp/dashboard/routes.py` — `state_route(holder)` factory + the read-only `/state` GET handler (`dataclasses.asdict(cache.current)`; 503 deps-null guard).
+- **NEW** `tests/test_dashboard_state.py` — AC1 (shape/by-ref/no-git/reflects-mutation), AC3 (non-GET rejected, route-table read-only), Decision A 503.
+- **UPDATE** `src/dev_helper_mcp/server_factory.py` — import `state_route`; add it to `routes=[…]` before the catch-all `Mount("/")` with a load-bearing comment.
+- **UPDATE** `tests/test_middleware_origin.py` — add `/state` to the Origin matrix `ROUTES` (AC2).
 
 ## Change Log
 
 | Date | Change |
 | --- | --- |
 | 2026-06-25 | Story 2.3 drafted (ready-for-dev): read-only `/state` GET endpoint in a new `dashboard/` adapter package, serving `dataclasses.asdict(cache.current)` (snake_case, by-ref, no git on poll); route ordered before the catch-all `Mount("/")` to fix the deferred route-shadowing; Origin middleware covers it for free; read-only (405 on non-GET). Hard prerequisite: Stories 2.1 + 2.2 implemented first. Decision A (deps-null window → **503**) operator-confirmed. Note: pre-commit `pytest` enforcement was intentionally removed — the gate is a manual command; run it yourself. |
+| 2026-06-25 | Story 2.3 implemented (status → review). New `dashboard/{__init__,routes}.py` + `tests/test_dashboard_state.py`; `server_factory.create_app` route list reordered (`state_route(holder)` before `Mount("/")`); `tests/test_middleware_origin.py` extended with a `/state` row. **Implementation finding:** non-GET `/state` returns 404 (not the guidance's 405) because the catch-all `Mount("/")` full-matches non-GET verbs and short-circuits before the GET-only route's partial 405 — AC3's binding "no mutating route or action" criterion is still fully satisfied (proven by the route-table assertion). Full manual gate green: ruff check + format clean, 209 passed / 5 slow deselected. `projection.py`/`cache.py` unchanged; adapter seam green; no new dependency. |
+
+## Review Findings (Code Review 2026-06-26)
+
+_3 review layers (Blind Hunter, Edge Case Hunter, Acceptance Auditor). All 3 ACs + Decision A confirmed SATISFIED; scope fences and SDK seam honored. 2 patch, 1 defer, 9 dismissed as noise._
+
+- [x] [Review][Patch] `state_route` docstring claims non-GET yields "Starlette's automatic 405" — reality is **404** via the catch-all `Mount("/")` fallthrough (the story's own Dev Record + tests already document 404; this lone comment is stale and contradicts them) [src/dev_helper_mcp/dashboard/routes.py:36-37] — FIXED: docstring rewritten to describe the PARTIAL-match → Mount-fallthrough → 404 reality.
+- [x] [Review][Patch] `test_non_get_methods_are_rejected_without_mutation`: the `assert resp.status_code >= 400` line is tautological after `in (404, 405)`, and accepting `(404, 405)` masks that the outcome is *always* 404 (Mount fallthrough). Tighten to `== 404` to pin the real contract; the verb test never asserts the store/cache is actually unchanged (read-only is structurally proven only by `test_route_table_is_read_only`) [tests/test_dashboard_state.py:137-138] — FIXED: tightened to `assert resp.status_code == 404` with a corrected comment; dead `>= 400` line removed.
+- [x] [Review][Defer] `GET /state/` (trailing slash) returns `Match.NONE`, falls through to the MCP `Mount("/")` → opaque 404, no 307 redirect to `/state`; untested [src/dev_helper_mcp/dashboard/routes.py:51] — deferred, out of this story's exact `/state` contract; flag for the Story 2.4b poller

@@ -1,6 +1,10 @@
+---
+baseline_commit: f25615be6e7e2b051ddcef54550d799bbece950a
+---
+
 # Story 2.4a: Static board structure + status encoding
 
-Status: ready-for-dev
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -39,40 +43,49 @@ so that I can read every task's status by position and shape, not color alone.
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1 — Pin the dashboard tokens in one place** (AC: 3) — *prevents CSS↔contrast-test drift*
-  - [ ] `src/dev_helper_mcp/dashboard/tokens.py` (NEW): the DESIGN.md color tokens as a Python dict/constants (single source of truth) — `BG="#0e1117"`, `SURFACE="#161b22"`, `BORDER="#21262d"`, `BAR_DONE="#373e47"`, `TEXT="#e6edf3"`, `TEXT_MUTED="#8b949e"`, `TEXT_DIM="#586069"`, `WORKTREE_REPO="#c9d1d9"`, `RUNNING="#39d0a8"`, `RUNNING_BORDER="#1f3f37"`, `BLOCKED="#e3a34a"`, `BLOCKED_BG="#2a2113"`, `BLOCKED_BORDER="#3d3320"`, `REVIEW="#6cb6ff"`, `REVIEW_BG="#16263d"`, `REVIEW_BORDER="#1f3a5c"`, `DONE="#7d8590"`. Also the **glyph map** `STATUS_GLYPH = {"running":"●","blocked":"▲","review":"◆","done":"✓"}` and the **status order** `ACTIVE_COLUMNS = ("running","blocked","review")`. (DESIGN.md frontmatter `colors:` is the authority; copy verbatim.) Pure module — no SDK, no I/O.
-  - [ ] The renderer injects these into the `:root{ --bg:…; … }` CSS block; the **contrast test imports the same module** — so the tested colors ARE the served colors (no drift). [Decision B]
-- [ ] **Task 2 — Build the pure server-side renderer `dashboard/render.py`** (AC: 1, 2, 4) — *the heart of the story* [Decision A: server-side render]
-  - [ ] `src/dev_helper_mcp/dashboard/render.py` (NEW): `def render_board(snapshot: dict) -> str` — a **pure** function: takes the snake_case snapshot dict (the `asdict(CacheSnapshot)` shape), returns a complete HTML page **string**. No `mcp`/`starlette` import, no I/O, no clock read — total and deterministic (mirror 2.1's purity discipline; makes it unit-testable without a server). Accept the dict shape (not the dataclass) so tests build payloads as plain dicts.
-  - [ ] **Page skeleton:** the harness wraps your output in `<!doctype html>…<head>…</head><body>…` — but this is a *standalone* server-served page, so produce the **full** document yourself: `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" …><title>dev-helper-mcp</title><style>…inline…</style></head><body>…board…<script>…</script></body></html>`. (No external `<link>`/`<script src>` — UX-DR10.)
-  - [ ] **Inline `<style>`** built from `tokens.py` `:root` vars + the component CSS adapted from the reference mock (`mockups/key-screen-board.html:2-62`). Reuse the mock's class system: `.summary/.pill/.cols/.col/.col-h/.card/.t/.g/.badge/.wt/.fold/.donecard`. **No `transition`/`animation`/`@keyframes`/`scroll-behavior:smooth`** anywhere (UX-DR4). System font stack only (`ui-sans-serif, system-ui, sans-serif`; mono `ui-monospace,…`) — no `@font-face`, no web font (UX-DR10).
-  - [ ] **Summary bar (UX-DR2):** one `pill` per status in order `running, blocked, review, done`, each `<glyph> <count> <label>` (e.g. `● 3 running`); **counts computed from `snapshot["tasks"]` grouped by `status`**; **zero-count pills still render** ("0 blocked"). The blocked pill is bolder (weight 700). A right-aligned `freshness-stamp` placeholder showing `generated_at` (raw for now — live relative-age + stale treatment is **2.4c**; just emit the value + a `data-generated-at` attribute the 2.4c JS will read). Done count in the bar **equals** the done-disclosure count (UX-DR13).
-  - [ ] **Board (UX-DR1):** a `<div class="cols">` grid with **exactly three** `<div class="col col-{running|blocked|review}">`, each with a `col-h` header `"<glyph> <Label> <count>"` (lifecycle order Running | Blocked | Review). Each column lists one **task-card per task** whose `status` matches the column. `done` tasks go to the disclosure, NOT a column (UX-DR13).
-  - [ ] **task-card (UX-DR3):** `<div class="card {status}" data-status="{status}" data-task-id="{task_id}">` (the `data-task-id` is for 2.4b's diff key — emit it now). Title row `<div class="t"><span class="g">{glyph}</span>{task_id or description}{optional reason-badge}</div>`. The **per-card glyph travels on the card** (not just the column header) — color-blind channel. Then one `worktree-line` per repo: `<div class="wt"><span class="repo">{repo basename or path}</span> · {branch}</div>` (full path on `title=` hover). Sort cards/worktrees per the snapshot (already sorted by 2.1: tasks by `task_id`, worktrees by `repo_path`).
-  - [ ] **reason-badge (UX-DR3):** blocked → `<span class="badge b">needs input</span>`; review → `<span class="badge r">awaiting review</span>`; running/done → no badge. **The markup must contain no "merge" string anywhere** (review ≠ merge — DESIGN.md:118-119, EXPERIENCE.md:37). Grep-tested.
-  - [ ] **Emphasis (UX-DR4):** blocked card is the only lifted element (ring + amber bloom via the `.card.blk` box-shadow from the mock); running flat; review flat; done dimmed (opacity ~.55 inside the disclosure). Encoded in CSS, no motion.
-  - [ ] **done-disclosure (UX-DR1/13):** a `<details class="fold done">` (collapsed, **no `open` attr**) below the board, `<summary>✓ {N} done</summary>` expanding to dimmed `donecard` rows (each with the ✓ glyph). (The orphan-disclosure population is **2.4c**; for 2.4a you MAY emit the empty done-disclosure structure — but the *zero-done omits the disclosure* rule is 2.4c. Keep 2.4a's scope to: done-disclosure present when there ARE done tasks; see scope fence.)
-  - [ ] **Escaping:** HTML-escape every interpolated value (`task_id`, `description`, `repo_path`, `branch`) — `markupsafe`/`html.escape`. A repo path or description is operator-controlled but still must not break the markup or inject a tag. Use stdlib `html.escape` (no new dep).
-- [ ] **Task 3 — Overflow CSS (UX-DR12)** (AC: 4)
-  - [ ] Board container `.cols`: `overflow-x: hidden` (or none) — the board **never** scrolls horizontally. Each `.col`: `overflow-y: auto` with a `max-height` (e.g. `calc(100vh - <summary-bar+padding>)`) so an over-full column scrolls **within itself**. (The mock omits these — 2.4a ADDS them.)
-  - [ ] **3→1 wrap at narrow width** via a media query: `@media (max-width: 680px){ .cols{ grid-template-columns: 1fr; } }` (value tunable). A media query is static layout, not motion — UX-DR4-safe.
-- [ ] **Task 4 — Serve the board at `/`** (AC: 1)
-  - [ ] In `dashboard/routes.py` add `def board_route(holder) -> Route:` returning `Route("/", board, methods=["GET"])`. Handler: read `deps = holder.deps`; if `None` → a minimal "server not ready" HTML (or 503) consistent with 2.3's Decision A; else `html = render_board(dataclasses.asdict(deps.cache.current))` → `return HTMLResponse(html)`.
-  - [ ] In `server_factory.create_app`, add `board_route(holder)` to `routes=[…]` **before `Mount("/", app=mcp_app)`** (same ordering trick 2.3 established). Order: `[state_route(holder), board_route(holder), Mount("/")]`. **`/` must resolve to the board, `/mcp` still to the MCP app with no 307** — verify `test_server_factory.py` stays green.
-  - [ ] **Read-only (FR-10):** `/` is GET-only; the page contains **no form, no button, no fetch-POST, no control** that mutates. (The poll loop is 2.4b and is GET-only too.)
-- [ ] **Task 5 — Tests** (AC: 1, 2, 3, 4)
-  - [ ] **`tests/test_dashboard_render.py` — HTML-output assertions (browser-free, via the stdlib HTML parser — Decision C, no new dep).** Use stdlib `html.parser.HTMLParser`/`xml.etree` or a regex-light parse. Build fixed snapshot dicts and assert against `render_board(...)` output:
+- [x] **Task 1 — Pin the dashboard tokens in one place** (AC: 3) — *prevents CSS↔contrast-test drift*
+  - [x] `src/dev_helper_mcp/dashboard/tokens.py` (NEW): the DESIGN.md color tokens as a Python dict/constants (single source of truth) — `BG="#0e1117"`, `SURFACE="#161b22"`, `BORDER="#21262d"`, `BAR_DONE="#373e47"`, `TEXT="#e6edf3"`, `TEXT_MUTED="#8b949e"`, `TEXT_DIM="#586069"`, `WORKTREE_REPO="#c9d1d9"`, `RUNNING="#39d0a8"`, `RUNNING_BORDER="#1f3f37"`, `BLOCKED="#e3a34a"`, `BLOCKED_BG="#2a2113"`, `BLOCKED_BORDER="#3d3320"`, `REVIEW="#6cb6ff"`, `REVIEW_BG="#16263d"`, `REVIEW_BORDER="#1f3a5c"`, `DONE="#7d8590"`. Also the **glyph map** `STATUS_GLYPH = {"running":"●","blocked":"▲","review":"◆","done":"✓"}` and the **status order** `ACTIVE_COLUMNS = ("running","blocked","review")`. (DESIGN.md frontmatter `colors:` is the authority; copy verbatim.) Pure module — no SDK, no I/O.
+  - [x] The renderer injects these into the `:root{ --bg:…; … }` CSS block; the **contrast test imports the same module** — so the tested colors ARE the served colors (no drift). [Decision B]
+- [x] **Task 2 — Build the pure server-side renderer `dashboard/render.py`** (AC: 1, 2, 4) — *the heart of the story* [Decision A: server-side render]
+  - [x] `src/dev_helper_mcp/dashboard/render.py` (NEW): `def render_board(snapshot: dict) -> str` — a **pure** function: takes the snake_case snapshot dict (the `asdict(CacheSnapshot)` shape), returns a complete HTML page **string**. No `mcp`/`starlette` import, no I/O, no clock read — total and deterministic (mirror 2.1's purity discipline; makes it unit-testable without a server). Accept the dict shape (not the dataclass) so tests build payloads as plain dicts.
+  - [x] **Page skeleton:** the harness wraps your output in `<!doctype html>…<head>…</head><body>…` — but this is a *standalone* server-served page, so produce the **full** document yourself: `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" …><title>dev-helper-mcp</title><style>…inline…</style></head><body>…board…<script>…</script></body></html>`. (No external `<link>`/`<script src>` — UX-DR10.)
+  - [x] **Inline `<style>`** built from `tokens.py` `:root` vars + the component CSS adapted from the reference mock (`mockups/key-screen-board.html:2-62`). Reuse the mock's class system: `.summary/.pill/.cols/.col/.col-h/.card/.t/.g/.badge/.wt/.fold/.donecard`. **No `transition`/`animation`/`@keyframes`/`scroll-behavior:smooth`** anywhere (UX-DR4). System font stack only (`ui-sans-serif, system-ui, sans-serif`; mono `ui-monospace,…`) — no `@font-face`, no web font (UX-DR10).
+  - [x] **Summary bar (UX-DR2):** one `pill` per status in order `running, blocked, review, done`, each `<glyph> <count> <label>` (e.g. `● 3 running`); **counts computed from `snapshot["tasks"]` grouped by `status`**; **zero-count pills still render** ("0 blocked"). The blocked pill is bolder (weight 700). A right-aligned `freshness-stamp` placeholder showing `generated_at` (raw for now — live relative-age + stale treatment is **2.4c**; just emit the value + a `data-generated-at` attribute the 2.4c JS will read). Done count in the bar **equals** the done-disclosure count (UX-DR13).
+  - [x] **Board (UX-DR1):** a `<div class="cols">` grid with **exactly three** `<div class="col col-{running|blocked|review}">`, each with a `col-h` header `"<glyph> <Label> <count>"` (lifecycle order Running | Blocked | Review). Each column lists one **task-card per task** whose `status` matches the column. `done` tasks go to the disclosure, NOT a column (UX-DR13).
+  - [x] **task-card (UX-DR3):** `<div class="card {status}" data-status="{status}" data-task-id="{task_id}">` (the `data-task-id` is for 2.4b's diff key — emit it now). Title row `<div class="t"><span class="g">{glyph}</span>{task_id or description}{optional reason-badge}</div>`. The **per-card glyph travels on the card** (not just the column header) — color-blind channel. Then one `worktree-line` per repo: `<div class="wt"><span class="repo">{repo basename or path}</span> · {branch}</div>` (full path on `title=` hover). Sort cards/worktrees per the snapshot (already sorted by 2.1: tasks by `task_id`, worktrees by `repo_path`).
+  - [x] **reason-badge (UX-DR3):** blocked → `<span class="badge b">needs input</span>`; review → `<span class="badge r">awaiting review</span>`; running/done → no badge. **The markup must contain no "merge" string anywhere** (review ≠ merge — DESIGN.md:118-119, EXPERIENCE.md:37). Grep-tested.
+  - [x] **Emphasis (UX-DR4):** blocked card is the only lifted element (ring + amber bloom via the `.card.blk` box-shadow from the mock); running flat; review flat; done dimmed (opacity ~.55 inside the disclosure). Encoded in CSS, no motion.
+  - [x] **done-disclosure (UX-DR1/13):** a `<details class="fold done">` (collapsed, **no `open` attr**) below the board, `<summary>✓ {N} done</summary>` expanding to dimmed `donecard` rows (each with the ✓ glyph). (The orphan-disclosure population is **2.4c**; for 2.4a you MAY emit the empty done-disclosure structure — but the *zero-done omits the disclosure* rule is 2.4c. Keep 2.4a's scope to: done-disclosure present when there ARE done tasks; see scope fence.)
+  - [x] **Escaping:** HTML-escape every interpolated value (`task_id`, `description`, `repo_path`, `branch`) — `markupsafe`/`html.escape`. A repo path or description is operator-controlled but still must not break the markup or inject a tag. Use stdlib `html.escape` (no new dep).
+- [x] **Task 3 — Overflow CSS (UX-DR12)** (AC: 4)
+  - [x] Board container `.cols`: `overflow-x: hidden` (or none) — the board **never** scrolls horizontally. Each `.col`: `overflow-y: auto` with a `max-height` (e.g. `calc(100vh - <summary-bar+padding>)`) so an over-full column scrolls **within itself**. (The mock omits these — 2.4a ADDS them.)
+  - [x] **3→1 wrap at narrow width** via a media query: `@media (max-width: 680px){ .cols{ grid-template-columns: 1fr; } }` (value tunable). A media query is static layout, not motion — UX-DR4-safe.
+- [x] **Task 4 — Serve the board at `/`** (AC: 1)
+  - [x] In `dashboard/routes.py` add `def board_route(holder) -> Route:` returning `Route("/", board, methods=["GET"])`. Handler: read `deps = holder.deps`; if `None` → a minimal "server not ready" HTML (or 503) consistent with 2.3's Decision A; else `html = render_board(dataclasses.asdict(deps.cache.current))` → `return HTMLResponse(html)`.
+  - [x] In `server_factory.create_app`, add `board_route(holder)` to `routes=[…]` **before `Mount("/", app=mcp_app)`** (same ordering trick 2.3 established). Order: `[state_route(holder), board_route(holder), Mount("/")]`. **`/` must resolve to the board, `/mcp` still to the MCP app with no 307** — verify `test_server_factory.py` stays green.
+  - [x] **Read-only (FR-10):** `/` is GET-only; the page contains **no form, no button, no fetch-POST, no control** that mutates. (The poll loop is 2.4b and is GET-only too.)
+- [x] **Task 5 — Tests** (AC: 1, 2, 3, 4)
+  - [x] **`tests/test_dashboard_render.py` — HTML-output assertions (browser-free, via the stdlib HTML parser — Decision C, no new dep).** Use stdlib `html.parser.HTMLParser`/`xml.etree` or a regex-light parse. Build fixed snapshot dicts and assert against `render_board(...)` output:
     - **(AC1/UX-DR1/13):** exactly 3 active columns (`.col-run/.col-blk/.col-rev` or `data` markers), grouped by task (one `.card[data-task-id]` per task; a 2-repo task → ONE card with TWO `.wt` lines), `done` tasks appear ONLY inside the `<details class="fold done">`, never in a column.
     - **(AC1/UX-DR2):** one summary pill per status incl. done; pill counts == rendered column card counts and == done-disclosure count; a zero-status still renders its "0 …" pill.
     - **(AC2/UX-DR3):** every `.card` has a `data-status` ∈ {running,blocked,review,done} AND a per-card glyph matching `STATUS_GLYPH`; blocked card has `needs input`, review has `awaiting review`; **no occurrence of the substring "merge"** in the whole document (case-insensitive).
     - **(AC2/UX-DR4-emphasis):** the blocked card carries the lift class; running/review are flat; done is dimmed (assert the class/opacity rule presence).
-  - [ ] **`tests/test_dashboard_static_lint.py` — static CSS/JS lint (grep, UX-DR4 + UX-DR10).** Over the rendered HTML: assert **absent**: `transition`, `animation`, `@keyframes`, `scroll-behavior:smooth`, `requestAnimationFrame`; assert **no external assets**: no `http://`/`https://`/protocol-relative `//`, no `<link …href>`, no `<script …src>`, no `@import`, no `url(http…)`. (2.4a ships no JS yet, or a tiny no-op — the JS lint mainly bites in 2.4b/c; include the grep now so it guards the page from the start.)
-  - [ ] **`tests/test_dashboard_contrast.py` — pure WCAG-ratio math (UX-DR11).** A pure `contrast_ratio(hex_fg, hex_bg) -> float` (relative-luminance per WCAG 2.x; no dep). Import the tokens from `dashboard/tokens.py`. Assert the **enumerated pairs** (EXPERIENCE.md:82 — *each status text + bar/glyph against bg and surface*): for `status ∈ {running, blocked, review, done}`: `contrast(status_color, BG) ≥ {4.5 for text-use, 3.0 for bar/glyph}` and same against `SURFACE`; plus primary `TEXT` vs `BG`/`SURFACE` ≥ 4.5. **If a pair fails** (e.g. `DONE` text on `SURFACE` is a known borderline ~4.3:1; dimmed-done is non-text), do NOT silently lower the threshold — **escalate as a finding** (adjust the token in `tokens.py` toward AA, or, if the pair is genuinely non-text/decorative, document why it is tested at 3.0 not 4.5). Record the resolution in the Change Log. (UX-DR11 is "no adjective without a threshold/ratio" — keep the thresholds honest.)
-  - [ ] **`tests/test_dashboard_overflow.py` (or fold into render test) — UX-DR12.** Parse the inline CSS: `.cols` has `overflow-x` none/hidden (no horizontal board scroll); a `.col` has `overflow-y:auto`; a max-width media query collapses the grid to one column.
-  - [ ] **Read-only smoke (FR-10):** `GET /` over the in-process ASGI client → 200 `text/html`; the document has no `<form>`, no `<button>`, no mutating control. (Wrap in `async with app.router.lifespan_context(app):`; base URL `http://127.0.0.1:<port>`.)
-- [ ] **Task 6 — Gate green + seam confirmation** (AC: all)
-  - [ ] `dashboard/{tokens,render,routes}.py` are adapter (`render`/`tokens` are pure but live under the adapter `dashboard/` package — not in `SEAM_MODULES`); core stays unchanged → `tests/test_adapter_seam.py` green.
-  - [ ] Full gate (manual): `uv run ruff check . && uv run ruff format --check . && uv run pytest -m "not slow"`. **No new dependency** (stdlib HTML parsing — Decision C). No schema change, no git command, no JS test yet (the `node --test` for the poller `diff()` is **2.4b**). ⚠️ Run the suite yourself — there is no pytest pre-commit enforcement (intentional; see gotcha).
+  - [x] **`tests/test_dashboard_static_lint.py` — static CSS/JS lint (grep, UX-DR4 + UX-DR10).** Over the rendered HTML: assert **absent**: `transition`, `animation`, `@keyframes`, `scroll-behavior:smooth`, `requestAnimationFrame`; assert **no external assets**: no `http://`/`https://`/protocol-relative `//`, no `<link …href>`, no `<script …src>`, no `@import`, no `url(http…)`. (2.4a ships no JS yet, or a tiny no-op — the JS lint mainly bites in 2.4b/c; include the grep now so it guards the page from the start.)
+  - [x] **`tests/test_dashboard_contrast.py` — pure WCAG-ratio math (UX-DR11).** A pure `contrast_ratio(hex_fg, hex_bg) -> float` (relative-luminance per WCAG 2.x; no dep). Import the tokens from `dashboard/tokens.py`. Assert the **enumerated pairs** (EXPERIENCE.md:82 — *each status text + bar/glyph against bg and surface*): for `status ∈ {running, blocked, review, done}`: `contrast(status_color, BG) ≥ {4.5 for text-use, 3.0 for bar/glyph}` and same against `SURFACE`; plus primary `TEXT` vs `BG`/`SURFACE` ≥ 4.5. **If a pair fails** (e.g. `DONE` text on `SURFACE` is a known borderline ~4.3:1; dimmed-done is non-text), do NOT silently lower the threshold — **escalate as a finding** (adjust the token in `tokens.py` toward AA, or, if the pair is genuinely non-text/decorative, document why it is tested at 3.0 not 4.5). Record the resolution in the Change Log. (UX-DR11 is "no adjective without a threshold/ratio" — keep the thresholds honest.)
+  - [x] **`tests/test_dashboard_overflow.py` (or fold into render test) — UX-DR12.** Parse the inline CSS: `.cols` has `overflow-x` none/hidden (no horizontal board scroll); a `.col` has `overflow-y:auto`; a max-width media query collapses the grid to one column.
+  - [x] **Read-only smoke (FR-10):** `GET /` over the in-process ASGI client → 200 `text/html`; the document has no `<form>`, no `<button>`, no mutating control. (Wrap in `async with app.router.lifespan_context(app):`; base URL `http://127.0.0.1:<port>`.)
+- [x] **Task 6 — Gate green + seam confirmation** (AC: all)
+  - [x] `dashboard/{tokens,render,routes}.py` are adapter (`render`/`tokens` are pure but live under the adapter `dashboard/` package — not in `SEAM_MODULES`); core stays unchanged → `tests/test_adapter_seam.py` green.
+  - [x] Full gate (manual): `uv run ruff check . && uv run ruff format --check . && uv run pytest -m "not slow"`. **No new dependency** (stdlib HTML parsing — Decision C). No schema change, no git command, no JS test yet (the `node --test` for the poller `diff()` is **2.4b**). ⚠️ Run the suite yourself — there is no pytest pre-commit enforcement (intentional; see gotcha).
+
+### Review Findings (code-review 2026-06-26)
+
+Adversarial review (Blind Hunter + Edge Case Hunter + Acceptance Auditor, all Opus 4.8). Spec-aware verdict: AC1–AC4 met, no scope creep into 2.4b/2.4c, UX-DR11 contrast resolution honest, tests enforce the ACs. 2 patches, 2 deferred, 21 dismissed as noise/false-positive (incl. a verified false "GET / → asdict(None) 500" — `Cache.__init__` seeds a valid empty snapshot, never None).
+
+- [x] [Review][Patch] Replace the vacuous `find_attr(...) == [] or all(...)` assertion with the direct "no done node in `.cols`" check (flagged by all three layers) [tests/test_dashboard_render.py: test_done_is_a_disclosure_not_a_column] — FIXED 2026-06-26
+- [x] [Review][Patch] Add an import-time token-table consistency assert in tokens.py (STATUS_GLYPH/STATUS_CLASS/STATUS_COLOR/STATUS_LABEL share keys; ACTIVE_COLUMNS ⊆ keys; STATUS_BADGE ⊆ keys) to fail-fast and defend render_board's "total" guarantee against future drift; also title-case `STATUS_LABEL["done"]` → "Done" for internal consistency (pills lowercase it anyway) [src/dev_helper_mcp/dashboard/tokens.py] — FIXED 2026-06-26
+- [x] [Review][Defer] Warnings + orphaned/untracked/None-status tasks are silently absent from the board — owned by Story 2.4c (orphan-disclosure, warnings region, per-repo "unavailable"); renderer stays total and counts stay consistent in 2.4a [src/dev_helper_mcp/dashboard/render.py] — deferred, out of 2.4a scope
+- [x] [Review][Defer] `test_non_get_methods_are_rejected_without_mutation` asserts exactly `404` vs its stated "≥400" intent (brittle to Starlette match-order) — pre-existing Story 2.3 test, not touched by 2.4a [tests/test_dashboard_state.py] — deferred, pre-existing
 
 ## Dev Notes
 
@@ -191,16 +204,72 @@ Adapted from the reference mock (`mockups/key-screen-board.html`) — **the mock
 
 ### Agent Model Used
 
-{{agent_model_name_version}}
+claude-opus-4-8 (Opus 4.8, 1M context) — bmad-dev-story workflow
 
 ### Debug Log References
 
+- Test DOM `_Node.text` initially concatenated all direct text *then* all children, dropping
+  document order so the summary-pill glyph landed after the count (`"1 running●"`). Fixed by
+  storing an ordered `_content` list (text + child nodes interleaved). Pill text is `"●1 running"`
+  (glyph glued to count, per the mock) — parsed with a `(\d+)\s+(\w+)` regex, not naive split.
+- `ruff format` reformatted 4 new/edited files (render.py, routes.py, two test files) on first
+  pass; re-checked clean.
+
 ### Completion Notes List
 
+- **Server-side render (Decision A):** `dashboard/render.py` `render_board(snapshot: dict) -> str`
+  is pure/total — no `mcp`/`starlette` import, no I/O, no clock; never raises on partial/orphan/
+  warning payloads. Adapter seam stays green (`tests/test_adapter_seam.py`).
+- **Tokens in one place (Decision B):** `dashboard/tokens.py` holds the DESIGN.md colors verbatim +
+  `STATUS_GLYPH`/`ACTIVE_COLUMNS`/`STATUS_COLOR`/`STATUS_CLASS`/`STATUS_BADGE`/`STATUS_LABEL`. The
+  renderer injects them into `:root`; the contrast test imports the SAME module → tested colors ARE
+  served colors, no drift.
+- **stdlib HTML parser (Decision C):** `test_dashboard_render.py` uses a tiny `html.parser`-based
+  DOM (no `selectolax`, no new dep). 24 new dashboard tests; full suite 233 passed / 5 slow
+  deselected.
+- **3 columns + by-task grouping:** exactly Running | Blocked | Review; one card per task with N
+  `.wt` lines; `done` is a collapsed `<details class="fold done">` (no `open`), never a column.
+  Summary bar = one pill per status incl. done, zero-counts render, counts == columns == disclosure.
+- **Non-color encoding:** every status node carries column + left bar + per-card glyph (●/▲/◆/✓) +
+  `data-status`; cards also carry `data-task-id` (the 2.4b diff key). Badges "needs input"/"awaiting
+  review"; the whole document contains no "merge" substring (grep-tested). Blocked is the only lifted
+  card; running/review flat; done dimmed (opacity .55).
+- **Static + self-contained:** no `transition`/`animation`/`@keyframes`/`scroll-behavior:smooth`, no
+  JS (page correct with JS disabled — poller is 2.4b); all CSS inline, system font stack, no
+  external asset (`://`, `<link>`, `src=`, `@import`, `url(` all absent).
+- **Overflow (UX-DR12):** `.cols{overflow-x:hidden}`, `.col{overflow-y:auto; max-height:calc(...)}`,
+  `@media (max-width:680px){.cols{grid-template-columns:1fr}}` (3→1 wrap, static layout — added on
+  top of the mock, which omits these).
+- **Route wiring:** `board_route(holder)` added to `dashboard/routes.py`; `create_app` route list is
+  now `[state_route, board_route, Mount("/")]` (board before the catch-all → `/` resolves to the
+  board, `/mcp` still 200 with no 307). `GET /` smoke: 200 `text/html`, no `<form>`/`<button>`/
+  `<input>`. Decision A deps-null window → minimal 503 page.
+- **Contrast finding — RESOLVED, not silently downgraded (UX-DR11):** all four status TEXT tokens
+  clear AA 4.5:1 on bg AND surface (the tight one is `done` on surface ≈ **4.64:1** — *above* AA;
+  the story's ~4.3 estimate was conservative, so the token needed no nudge and the 4.5 threshold was
+  never weakened). All glyphs and the three active-column bars clear 3:1. The single token under
+  3:1 is the `done` card's left bar (`BAR_DONE` ≈ 1.6:1 vs surface) — kept as-is because that bar is
+  **decorative, not a status channel**: done is segregated in its disclosure (position) + carries the
+  ✓ glyph (≥3:1) + is dimmed. `test_done_bar_is_decorative_not_a_status_channel` pins the decision so
+  no future change can silently rely on the done bar for status.
+
 ### File List
+
+- **NEW** `src/dev_helper_mcp/dashboard/tokens.py`
+- **NEW** `src/dev_helper_mcp/dashboard/render.py`
+- **NEW** `tests/test_dashboard_render.py`
+- **NEW** `tests/test_dashboard_static_lint.py`
+- **NEW** `tests/test_dashboard_contrast.py`
+- **NEW** `tests/test_dashboard_overflow.py`
+- **MODIFIED** `src/dev_helper_mcp/dashboard/routes.py` (+`board_route`, `HTMLResponse`/`render_board` imports)
+- **MODIFIED** `src/dev_helper_mcp/server_factory.py` (+`board_route` in the route list, before `Mount("/")`)
+- **MODIFIED** `tests/test_dashboard_state.py` (`test_route_table_is_read_only` now expects the 3-route table incl. the read-only `/` board)
+- **MODIFIED** `_bmad-output/implementation-artifacts/2-4a-static-board-structure-status-encoding.md` (this file: frontmatter `baseline_commit`, task checkboxes, Dev Agent Record, File List, Change Log, Status)
+- **MODIFIED** `_bmad-output/implementation-artifacts/sprint-status.yaml` (2.4a → in-progress → review)
 
 ## Change Log
 
 | Date | Change |
 | --- | --- |
+| 2026-06-26 | Story 2.4a implemented (Status → review): `dashboard/tokens.py` + pure `dashboard/render.py` (`render_board(snapshot)->str`) + `GET /` board route wired before `Mount("/")`. 3 active columns grouped by task, folded done-disclosure, summary pills (zero-counts shown, counts agree), per-card glyph + `data-status` + `data-task-id`, blocked-only lift, no-motion/self-contained, UX-DR12 overflow. Browser-free tests: HTML-output (stdlib parser, Decision C), static lint, WCAG-contrast math, overflow — 24 new tests; full fast suite 233 passed. Updated 2.3's route-table test for the new read-only `/` route. **Contrast resolution:** all status TEXT clears AA 4.5:1 (done-on-surface ≈4.64:1, above AA — token unchanged, threshold not weakened); the sub-3:1 `done` left bar (`BAR_DONE`) is decorative (done conveyed by disclosure position + ✓ glyph + dimming), pinned by a dedicated test. No new dependency; no core/store/projection/cache change; adapter seam green. |
 | 2026-06-25 | Story 2.4a drafted (ready-for-dev): server-side-rendered static board — `dashboard/tokens.py` (colors/glyphs/order) + pure `dashboard/render.py` (`render_board(snapshot)->str`) + `/` board route; 3 active columns grouped by task, folded Done disclosure, summary pills, per-card glyph + `data-status` non-color encoding, blocked-only lift, no-motion/self-contained, overflow contract; browser-free tests (HTML-output, static lint, WCAG-contrast math, overflow). Hard prerequisite: 2.1/2.2/2.3 implemented first. Decisions operator-confirmed: A server-side render, B tokens in one module, C **stdlib HTML parser (no `selectolax`)**. Gotchas flagged: route ordering, the borderline `done`-on-surface contrast pair, and that pytest pre-commit enforcement is intentionally removed (gate is a manual command). |

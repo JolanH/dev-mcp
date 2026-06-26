@@ -15,9 +15,10 @@ ALLOWED_ORIGIN = f"http://127.0.0.1:{DEFAULT_PORT}"
 ALLOWED_ORIGIN_LOCALHOST = f"http://localhost:{DEFAULT_PORT}"
 BAD_ORIGIN = "http://evil.example.com"
 
-# "/" is a non-/mcp route (no dashboard yet -> 404 when allowed). The point is
-# the Origin gate runs regardless of whether the route exists.
-ROUTES = ["/mcp", "/"]
+# "/" is a non-/mcp route (404 when allowed). "/state" (Story 2.3) is a real
+# dashboard route guarded by the SAME outermost middleware as /mcp. The point is
+# the Origin gate runs on every route regardless of whether it resolves.
+ROUTES = ["/mcp", "/", "/state"]
 
 
 async def _request(app, asgi_client_factory, path: str, origin: str | None) -> httpx.Response:
