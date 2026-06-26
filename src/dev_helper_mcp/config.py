@@ -156,6 +156,10 @@ def legal_transition(src: str, dst: str) -> bool:
 
 #: DB filename inside the machine-global state dir.
 STATE_DB_NAME = "state.db"
+#: Single-instance lockfile name, a sibling of the DB in the same state dir
+#: (``server.lock``). The process-singleton guard (AR-10) — distinct from the
+#: per-repo mutation mutex (AR-14). See ``lock.py``.
+LOCKFILE_NAME = "server.lock"
 #: Current schema version stamped into ``PRAGMA user_version``. Opening a DB
 #: with a *newer* version is refused (version-check-only migrations).
 SCHEMA_VERSION = 1
@@ -179,3 +183,12 @@ def state_dir() -> Path:
 def default_db_path() -> Path:
     """Absolute path to the machine-global SQLite DB."""
     return state_dir() / STATE_DB_NAME
+
+
+def lockfile_path() -> Path:
+    """Absolute path to the machine-global single-instance lockfile.
+
+    Mirrors ``default_db_path()`` exactly — reads ``state_dir()`` on every call so
+    the autouse ``XDG_STATE_HOME`` test isolation works (never cache at import).
+    """
+    return state_dir() / LOCKFILE_NAME
