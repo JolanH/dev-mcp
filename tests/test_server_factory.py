@@ -215,3 +215,33 @@ def test_list_and_remove_worktree_tools_registered_and_reachable(
     remove_payload = json.loads(removed.content[0].text)
     assert remove_payload["ok"] is True
     assert remove_payload["data"]["task_closed"] is True
+
+
+def test_start_task_prompt_advertised_and_reads_skill(app, asgi_client_factory, base_url):
+    """The ``start_task`` prompt is advertised over the handshake and renders the
+    canonical SKILL.md body (single source of truth) — frontmatter stripped, the
+    optional ``task_intent`` woven in."""
+
+    async def _run():
+        async with app.router.lifespan_context(app):
+            async with asgi_client_factory() as http_client:
+                async with streamable_http_client(
+                    url=f"{base_url}/mcp",
+                    http_client=http_client,
+                ) as (read, write, _get_session_id):
+                    async with ClientSession(read, write) as session:
+                        await session.initialize()
+                        listed = (await session.list_prompts()).prompts
+                        got = await session.get_prompt(
+                            "start_task", {"task_intent": "add a /healthz route"}
+                        )
+                        return listed, got
+
+    listed, got = asyncio.run(_run())
+    names = {p.name for p in listed}
+    assert "start_task" in names
+    rendered = got.messages[0].content.text
+    # Intent woven in, frontmatter stripped, real SKILL.md body present.
+    assert "add a /healthz route" in rendered
+    assert "name: start-task" not in rendered
+    assert "# Start Task" in rendered

@@ -7,8 +7,9 @@ dashboard.
 One server per machine (single-instance lock) learns its repos from
 `create_task` — there is **no `--repo` flag**. It exposes five MCP tools
 (`create_task`, `list_worktrees`, `remove_worktree`, `update_task`,
-`list_tasks`) and a browser dashboard that derives its view from `git worktree
-list` on every poll (no persisted derived state).
+`list_tasks`), one MCP prompt (`start_task` — a reusable create-then-implement
+workflow any connecting agent can pull in), and a browser dashboard that derives
+its view from `git worktree list` on every poll (no persisted derived state).
 
 ## Requirements
 
@@ -120,6 +121,35 @@ Every tool returns the uniform `{ok, data, error}` envelope — on failure,
 
 Open the dashboard URL printed at startup in a browser to watch tasks and
 worktrees update live while you work.
+
+### The `start_task` prompt (create-then-implement workflow)
+
+Beyond the tools, the server exposes one **MCP prompt**, `start_task`. MCP
+prompts are server-defined, client-invoked templates: any agent connected to the
+server can pull the prompt in (in Claude Code it surfaces under `/mcp`, typically
+as `/mcp__dev-helper__start_task`). It takes an optional `task_intent` argument —
+a free-text description of what to build — and returns a workflow that tells the
+agent to:
+
+1. `create_task` (gathering only a `task_name`; let `repos`/`base_ref` default), then
+2. `update_task → running` before touching code, then
+3. implement the change (using the `bmad-quick-dev` skill if present), and
+4. flip to `update_task → blocked` **before asking you to confirm/decide anything**,
+   back to `running` on resume, ending at `review` (or `done` only on your say-so).
+
+It keeps the dashboard honest by construction: status reflects reality at every
+step, complementing the best-effort hook below.
+
+**Single source of truth.** The prompt body is not hardcoded in Python — at fetch
+time the server reads `.claude/skills/start-task/SKILL.md` (the same file the
+Claude Code skill of the same name uses), strips its frontmatter, and returns the
+workflow. Editing that one file updates both the `/start-task` skill (for this
+repo's Claude Code sessions) and the `start_task` MCP prompt (for any connecting
+agent) — no restart, no second copy to keep in sync.
+
+> Note: prompts are *pulled*, not pushed — an agent only sees `start_task` when
+> its client lists/invokes prompts. Headless agents that never enumerate prompts
+> won't pick it up automatically.
 
 ### Auto-mark tasks blocked when an agent needs you
 

@@ -194,6 +194,18 @@ SCHEMA_VERSION = 1
 SQLITE_BUSY_TIMEOUT_MS = 5000
 
 
+def start_task_skill_path() -> Path:
+    """Canonical source of the ``start-task`` workflow: the same ``SKILL.md`` the
+    Claude Code skill uses, read by the ``start_task`` MCP prompt so the workflow has
+    ONE source of truth (no duplicated copy in Python).
+
+    Anchored on the package location — ``<repo-root>/.claude/skills/start-task/SKILL.md``
+    — valid for the editable/source checkout this dev tool runs from
+    (``src/dev_helper_mcp/config.py`` → ``parents[2]`` is the repo root).
+    """
+    return Path(__file__).resolve().parents[2] / ".claude" / "skills" / "start-task" / "SKILL.md"
+
+
 def state_dir() -> Path:
     """Machine-global runtime state dir: ``${XDG_STATE_HOME:-~/.local/state}/dev-helper-mcp``.
 

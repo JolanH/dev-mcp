@@ -33,7 +33,7 @@ from starlette.middleware import Middleware
 from starlette.routing import Mount
 
 from .cache import Cache, run_refresher
-from .config import APP_NAME, CACHE_REFRESH_INTERVAL, MCP_PATH
+from .config import APP_NAME, CACHE_REFRESH_INTERVAL, MCP_PATH, start_task_skill_path
 from .dashboard.routes import board_route, state_route
 from .errors import Internal
 from .git.repo_lock import RepoLockRegistry
@@ -51,6 +51,35 @@ from .tools.models import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _strip_frontmatter(text: str) -> str:
+    """Drop a leading YAML frontmatter block (``---`` … ``---``) if present.
+
+    SKILL.md opens with ``name``/``description`` frontmatter that is meaningful to the
+    Claude Code skill loader but noise inside a rendered prompt; everything from the
+    line after the closing ``---`` onward is the workflow body. Text without a leading
+    fence is returned unchanged.
+    """
+    if not text.startswith("---"):
+        return text
+    close = text.find("\n---", 3)
+    if close == -1:
+        return text
+    body_start = text.find("\n", close + 1)
+    return text[body_start + 1 :] if body_start != -1 else ""
+
+
+def _load_start_task_workflow() -> str:
+    """Read the canonical ``start-task`` SKILL.md and return its body, frontmatter stripped.
+
+    The ``start_task`` MCP prompt and the Claude Code skill share this one file so the
+    workflow has a single source of truth. It is re-read on each prompt fetch (prompts
+    are not a hot path), so edits to SKILL.md are reflected without restarting the
+    server. Propagates ``FileNotFoundError`` if the skill is missing — a loud failure is
+    correct here, since a silent fallback would let the two copies drift apart again.
+    """
+    return _strip_frontmatter(start_task_skill_path().read_text(encoding="utf-8")).strip()
 
 
 class _DepsHolder:
@@ -188,6 +217,25 @@ def build_mcp(holder: _DepsHolder) -> FastMCP:
 
         inp = ListTasksIn(status=status, repo=repo)
         return await handlers.list_tasks(inp, deps=deps)
+
+    @mcp.prompt(
+        name="start_task",
+        description=(
+            "Create an isolated dev task with this server's task tools and implement it "
+            "end-to-end, self-reporting status (running / blocked / review). Exposes the "
+            "start-task workflow to any connecting agent."
+        ),
+    )
+    def start_task(task_intent: str = "") -> str:
+        """Return the start-task workflow, optionally prefixed with the user's intent.
+
+        ``task_intent`` is an optional free-text statement of what to build; when
+        supplied it is woven in as the request the workflow should act on.
+        """
+        workflow = _load_start_task_workflow()
+        if task_intent.strip():
+            return f"The task to start and implement:\n\n{task_intent.strip()}\n\n{workflow}"
+        return workflow
 
     # Serve the streamable-HTTP endpoint at /mcp directly so a bare /mcp resolves
     # with no trailing-slash 307 redirect (see module docstring).
