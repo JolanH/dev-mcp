@@ -22,6 +22,8 @@ from dev_helper_mcp.errors import (
     Internal,
     InvalidStatus,
     InvalidTaskName,
+    NoDefaultBaseRef,
+    NoDefaultRepo,
     NotAGitRepo,
     RollbackIncomplete,
     TaskNotFound,
@@ -441,6 +443,61 @@ def test_empty_repos_rejected(tmp_path):
 
 def test_branch_name_helper():
     assert branch_name_for("foo") == "agent/foo"
+
+
+# ── cwd-derived create_task defaults (resolve_default_repo / resolve_default_base_ref) ──
+
+
+def test_resolve_default_repo_returns_toplevel(tmp_git_repo):
+    # A nested subdir resolves up to the work-tree toplevel.
+    sub = tmp_git_repo / "pkg"
+    sub.mkdir()
+
+    async def run():
+        return await tasks.resolve_default_repo(runner=GitRunner(), cwd=str(sub))
+
+    result = asyncio.run(run())
+    assert os.path.realpath(result) == os.path.realpath(str(tmp_git_repo))
+
+
+def test_resolve_default_repo_outside_a_repo_raises(tmp_path):
+    outside = tmp_path / "plain"
+    outside.mkdir()
+
+    async def run():
+        with pytest.raises(NoDefaultRepo):
+            await tasks.resolve_default_repo(runner=GitRunner(), cwd=str(outside))
+
+    asyncio.run(run())
+
+
+def test_resolve_default_base_ref_returns_current_branch(tmp_git_repo):
+    async def run():
+        return await tasks.resolve_default_base_ref(runner=GitRunner(), cwd=str(tmp_git_repo))
+
+    assert asyncio.run(run()) == "main"
+
+
+def test_resolve_default_base_ref_detached_head_raises(tmp_git_repo):
+    # Detach HEAD onto the current commit so symbolic-ref has no branch to report.
+    _git(tmp_git_repo, "checkout", "-q", "--detach", "HEAD")
+
+    async def run():
+        with pytest.raises(NoDefaultBaseRef):
+            await tasks.resolve_default_base_ref(runner=GitRunner(), cwd=str(tmp_git_repo))
+
+    asyncio.run(run())
+
+
+def test_resolve_default_base_ref_outside_a_repo_raises(tmp_path):
+    outside = tmp_path / "plain"
+    outside.mkdir()
+
+    async def run():
+        with pytest.raises(NoDefaultBaseRef):
+            await tasks.resolve_default_base_ref(runner=GitRunner(), cwd=str(outside))
+
+    asyncio.run(run())
 
 
 # ══════════════════════════════════════════════════════════════════════════════

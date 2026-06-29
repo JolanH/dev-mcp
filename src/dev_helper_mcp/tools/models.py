@@ -7,15 +7,20 @@ handler. Importing pydantic here is allowed (this layer is not seam-scanned).
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 
 class CreateTaskIn(BaseModel):
-    """Validated input for the ``create_task`` tool."""
+    """Validated input for the ``create_task`` tool.
+
+    Only ``task_name`` is required. ``description`` defaults to the empty string;
+    ``repos`` and ``base_ref`` default to ``None`` meaning "derive from the server's
+    current directory" — the handler resolves the cwd's repo / branch (or returns a
+    ``NoDefaultRepo`` / ``NoDefaultBaseRef`` error when it cannot)."""
 
     task_name: str
-    description: str
-    repos: list[str] = Field(min_length=1)
+    description: str = ""
+    repos: list[str] | None = None
     base_ref: str | None = None
 
 

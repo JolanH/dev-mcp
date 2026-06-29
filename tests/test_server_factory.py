@@ -122,6 +122,7 @@ def test_update_and_list_tasks_tools_roundtrip(app, asgi_client_factory, base_ur
                                 "task_name": "task-tool",
                                 "description": "d",
                                 "repos": [str(tmp_git_repo)],
+                                "base_ref": "main",
                             },
                         )
                         updated = await session.call_tool(
@@ -163,6 +164,7 @@ def test_create_task_tool_registered_and_reachable(
                                 "task_name": "via-mcp",
                                 "description": "round trip",
                                 "repos": [str(tmp_git_repo)],
+                                "base_ref": "main",
                             },
                         )
 
@@ -195,6 +197,7 @@ def test_list_and_remove_worktree_tools_registered_and_reachable(
                                 "task_name": "wt-tool",
                                 "description": "d",
                                 "repos": [str(tmp_git_repo)],
+                                "base_ref": "main",
                             },
                         )
                         listed = await session.call_tool("list_worktrees", {})

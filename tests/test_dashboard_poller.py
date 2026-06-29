@@ -51,6 +51,7 @@ def test_live_update_reflected_in_next_state_poll(app, asgi_client_factory, base
                                 "task_name": "live-task",
                                 "description": "d",
                                 "repos": [str(tmp_git_repo)],
+                                "base_ref": "main",
                             },
                         )
                         after_create = await client.get("/state")
@@ -98,6 +99,7 @@ def test_board_page_serves_inlined_poller_seeded_from_state(app, asgi_client_fac
                                 "task_name": "page-task",
                                 "description": "d",
                                 "repos": [str(tmp_git_repo)],
+                                "base_ref": "main",
                             },
                         )
                 return await client.get("/")

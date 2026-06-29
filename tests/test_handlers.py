@@ -4,6 +4,7 @@ Drives the adapter handler directly with real injected deps (no server/port).
 """
 
 import asyncio
+import os
 
 from dev_helper_mcp.cache import Cache
 from dev_helper_mcp.git.repo_lock import RepoLockRegistry
@@ -42,7 +43,9 @@ def test_success_envelope(tmp_git_repo, tmp_path):
         store = await Store.open(tmp_path / "state.db")
         try:
             return await create_task(
-                CreateTaskIn(task_name="feat", description="d", repos=[str(tmp_git_repo)]),
+                CreateTaskIn(
+                    task_name="feat", description="d", repos=[str(tmp_git_repo)], base_ref="main"
+                ),
                 deps=_deps(store),
             )
         finally:
@@ -64,13 +67,17 @@ def test_typed_error_envelope(tmp_git_repo, tmp_path):
         try:
             deps = _deps(store)
             await create_task(
-                CreateTaskIn(task_name="dup", description="d", repos=[str(tmp_git_repo)]),
+                CreateTaskIn(
+                    task_name="dup", description="d", repos=[str(tmp_git_repo)], base_ref="main"
+                ),
                 deps=deps,
             )
             await store._conn.execute("UPDATE task SET status='review' WHERE task_id='dup'")
             await store._conn.commit()
             return await create_task(
-                CreateTaskIn(task_name="dup", description="d2", repos=[str(tmp_git_repo)]),
+                CreateTaskIn(
+                    task_name="dup", description="d2", repos=[str(tmp_git_repo)], base_ref="main"
+                ),
                 deps=deps,
             )
         finally:
@@ -91,7 +98,9 @@ def test_not_a_repo_error_envelope(tmp_path):
             non_repo = tmp_path / "plain"
             non_repo.mkdir()
             return await create_task(
-                CreateTaskIn(task_name="x", description="d", repos=[str(non_repo)]),
+                CreateTaskIn(
+                    task_name="x", description="d", repos=[str(non_repo)], base_ref="main"
+                ),
                 deps=_deps(store),
             )
         finally:
@@ -100,6 +109,74 @@ def test_not_a_repo_error_envelope(tmp_path):
     env = asyncio.run(run())
     assert env["ok"] is False
     assert env["error"]["code"] == "NotAGitRepo"
+
+
+# ── cwd-derived defaults: only task_name is required ──
+
+
+def test_defaults_repos_and_base_ref_from_cwd(tmp_git_repo, tmp_path, monkeypatch):
+    """With only ``task_name``, ``repos`` defaults to the git repo at the cwd and
+    ``base_ref`` to the cwd's branch (``main``); ``description`` defaults to ""."""
+    monkeypatch.chdir(tmp_git_repo)
+
+    async def run():
+        store = await Store.open(tmp_path / "state.db")
+        try:
+            return await create_task(CreateTaskIn(task_name="feat"), deps=_deps(store))
+        finally:
+            await store.close()
+
+    env = asyncio.run(run())
+    assert env["ok"] is True, env
+    assert env["data"]["task_id"] == "feat"
+    wt = env["data"]["worktrees"]
+    assert len(wt) == 1
+    assert wt[0]["repo_path"] == os.path.abspath(str(tmp_git_repo))
+    assert wt[0]["branch"] == "agent/feat"
+
+
+def test_missing_repos_outside_a_repo_errors(tmp_path, monkeypatch):
+    """``repos`` omitted while the cwd is not a git repo → NoDefaultRepo (error-as-data)."""
+    outside = tmp_path / "not-a-repo"
+    outside.mkdir()
+    monkeypatch.chdir(outside)
+
+    async def run():
+        store = await Store.open(tmp_path / "state.db")
+        try:
+            # base_ref given so the failure is unambiguously about repos.
+            return await create_task(
+                CreateTaskIn(task_name="x", base_ref="main"), deps=_deps(store)
+            )
+        finally:
+            await store.close()
+
+    env = asyncio.run(run())
+    assert env["ok"] is False
+    assert env["data"] is None
+    assert env["error"]["code"] == "NoDefaultRepo"
+
+
+def test_missing_base_ref_outside_a_repo_errors(tmp_git_repo, tmp_path, monkeypatch):
+    """``base_ref`` omitted while the cwd is not on a branch → NoDefaultBaseRef."""
+    outside = tmp_path / "not-a-repo"
+    outside.mkdir()
+    monkeypatch.chdir(outside)
+
+    async def run():
+        store = await Store.open(tmp_path / "state.db")
+        try:
+            # repos given explicitly so the failure is unambiguously about base_ref.
+            return await create_task(
+                CreateTaskIn(task_name="x", repos=[str(tmp_git_repo)]), deps=_deps(store)
+            )
+        finally:
+            await store.close()
+
+    env = asyncio.run(run())
+    assert env["ok"] is False
+    assert env["data"] is None
+    assert env["error"]["code"] == "NoDefaultBaseRef"
 
 
 # ── list_worktrees / remove_worktree envelopes (Story 1.5) ──
@@ -111,7 +188,9 @@ def test_list_worktrees_success_envelope(tmp_git_repo, tmp_path):
         try:
             deps = _deps(store)
             await create_task(
-                CreateTaskIn(task_name="feat", description="d", repos=[str(tmp_git_repo)]),
+                CreateTaskIn(
+                    task_name="feat", description="d", repos=[str(tmp_git_repo)], base_ref="main"
+                ),
                 deps=deps,
             )
             return await list_worktrees(ListWorktreesIn(), deps=deps)
@@ -136,7 +215,9 @@ def test_remove_worktree_success_envelope(tmp_git_repo, tmp_path):
         try:
             deps = _deps(store)
             await create_task(
-                CreateTaskIn(task_name="feat", description="d", repos=[str(tmp_git_repo)]),
+                CreateTaskIn(
+                    task_name="feat", description="d", repos=[str(tmp_git_repo)], base_ref="main"
+                ),
                 deps=deps,
             )
             return await remove_worktree(
@@ -240,7 +321,9 @@ def test_list_tasks_success_envelope(tmp_git_repo, tmp_path):
         try:
             deps = _deps(store)
             await create_task(
-                CreateTaskIn(task_name="feat", description="d", repos=[str(tmp_git_repo)]),
+                CreateTaskIn(
+                    task_name="feat", description="d", repos=[str(tmp_git_repo)], base_ref="main"
+                ),
                 deps=deps,
             )
             return await list_tasks(ListTasksIn(), deps=deps)

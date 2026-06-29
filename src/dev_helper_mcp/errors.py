@@ -46,6 +46,21 @@ class BaseRefNotFound(DevHelperError):
     code = "BaseRefNotFound"
 
 
+class NoDefaultRepo(DevHelperError):
+    """``create_task`` omitted ``repos`` and the server's current directory is not
+    inside a git work tree, so no default repo could be derived — pass ``repos``."""
+
+    code = "NoDefaultRepo"
+
+
+class NoDefaultBaseRef(DevHelperError):
+    """``create_task`` omitted ``base_ref`` and the server's current directory is not
+    on a branch (detached HEAD / not a repo), so no default branch could be derived —
+    pass ``base_ref``."""
+
+    code = "NoDefaultBaseRef"
+
+
 class DirtyWorktree(DevHelperError):
     code = "DirtyWorktree"
 

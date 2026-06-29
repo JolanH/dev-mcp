@@ -411,7 +411,9 @@ def test_create_task_handler_refreshes_cache_before_returning(tmp_git_repo, tmp_
             # The cache is empty before the mutation.
             assert cache.current.tasks == ()
             env = await create_task(
-                CreateTaskIn(task_name="feat", description="d", repos=[str(tmp_git_repo)]),
+                CreateTaskIn(
+                    task_name="feat", description="d", repos=[str(tmp_git_repo)], base_ref="main"
+                ),
                 deps=deps,
             )
             return env, cache.current

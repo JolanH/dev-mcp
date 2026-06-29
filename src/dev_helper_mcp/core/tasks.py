@@ -36,6 +36,8 @@ from ..errors import (
     DevHelperError,
     InvalidStatus,
     InvalidTaskName,
+    NoDefaultBaseRef,
+    NoDefaultRepo,
     RollbackIncomplete,
     TaskNotFound,
     WorktreePathInUse,
@@ -46,6 +48,48 @@ from ..store import Store
 from ..util import now_iso
 
 _RUNNING = "running"
+
+
+async def resolve_default_repo(*, runner: GitRunner, cwd: str | None = None) -> str:
+    """Resolve the repo ``create_task`` defaults ``repos`` to when it is omitted: the
+    git work tree containing the server's current directory (where the CLI was launched).
+
+    Returns the work tree's toplevel path. Raises :class:`NoDefaultRepo` when the cwd is
+    not inside a git work tree — the caller must then pass ``repos`` explicitly. The git
+    call goes through the injected ``runner`` (Invariant 1); ``cwd`` is injectable so the
+    resolution is unit-testable without ``os.chdir``.
+    """
+    base = os.getcwd() if cwd is None else cwd
+    result = await runner.run_git(base, ["rev-parse", "--show-toplevel"], pool=Pool.READ)
+    if result.returncode != 0:
+        raise NoDefaultRepo(
+            "current directory is not inside a git repository; pass `repos` explicitly",
+            {"cwd": base},
+        )
+    return result.stdout.decode(errors="replace").strip()
+
+
+async def resolve_default_base_ref(*, runner: GitRunner, cwd: str | None = None) -> str:
+    """Resolve the ref ``create_task`` defaults ``base_ref`` to when it is omitted: the
+    branch currently checked out in the server's current directory.
+
+    Returns the short branch name. Raises :class:`NoDefaultBaseRef` when the cwd is not
+    on a branch — a detached HEAD or a non-repo (``git symbolic-ref`` exits non-zero in
+    both cases) — so the caller must pass ``base_ref`` explicitly. Goes through the
+    injected ``runner`` (Invariant 1); ``cwd`` is injectable for testing.
+    """
+    base = os.getcwd() if cwd is None else cwd
+    result = await runner.run_git(
+        base, ["symbolic-ref", "--quiet", "--short", "HEAD"], pool=Pool.READ
+    )
+    branch = result.stdout.decode(errors="replace").strip()
+    if result.returncode != 0 or not branch:
+        raise NoDefaultBaseRef(
+            "current directory is not on a git branch (detached HEAD or not a repo); "
+            "pass `base_ref` explicitly",
+            {"cwd": base},
+        )
+    return branch
 
 
 async def create(

@@ -84,6 +84,7 @@ def test_state_returns_live_snapshot_and_reflects_mutation(
                                 "task_name": "state-task",
                                 "description": "d",
                                 "repos": [str(tmp_git_repo)],
+                                "base_ref": "main",
                             },
                         )
                 after_resp = await client.get("/state")

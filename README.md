@@ -84,7 +84,8 @@ arguments. Small examples:
 | You say | Tool Claude calls | Arguments |
 | --- | --- | --- |
 | "Start a task `add-oauth` to add OAuth across the api and web repos." | `create_task` | `task_name="add-oauth"`, `description="add OAuth"`, `repos=["/path/api", "/path/web"]` |
-| "Branch it off the `release` branch instead of HEAD." | `create_task` | `… base_ref="release"` |
+| "Start a task `add-oauth` here." (run from inside a repo) | `create_task` | `task_name="add-oauth"` — `repos`/`base_ref` default to the server's cwd repo + branch |
+| "Branch it off the `release` branch instead." | `create_task` | `… base_ref="release"` |
 | "What worktrees exist for `add-oauth`?" | `list_worktrees` | `task_id="add-oauth"` |
 | "Show every task that's awaiting review." | `list_tasks` | `status="review"` |
 | "Mark `add-oauth` as ready for review." | `update_task` | `task_id="add-oauth"`, `status="review"` |
@@ -94,8 +95,11 @@ What the tools do:
 
 - **`create_task`** — create a task across one or more repos. Each repo gets an
   isolated worktree at `<repo>.worktrees/<task>/` on a new `agent/<task>` branch.
-  All-or-nothing across repos. `base_ref` is optional (defaults to the repo's
-  current HEAD).
+  All-or-nothing across repos. Only `task_name` is required: `description` defaults
+  to empty, `repos` defaults to the git repo containing the server's current
+  directory, and `base_ref` defaults to that directory's current branch. If a default
+  can't be derived (the cwd isn't a git repo / isn't on a branch) the omitted argument
+  errors as `NoDefaultRepo` / `NoDefaultBaseRef` — pass it explicitly.
 - **`list_worktrees`** — live-derived from `git worktree list` (never a cache);
   optional `repo` / `task_id` filters. Each entry flags `orphaned` if its branch
   is gone from git.

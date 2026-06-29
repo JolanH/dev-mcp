@@ -44,13 +44,27 @@ class ToolDeps:
 
 
 async def create_task(inp: CreateTaskIn, *, deps: ToolDeps) -> dict:
-    """Handle ``create_task``: run the core orchestrator, return the envelope."""
+    """Handle ``create_task``: resolve cwd-derived defaults, run the core orchestrator,
+    return the envelope.
+
+    Only ``task_name`` is required. When ``repos`` is omitted it defaults to the git repo
+    containing the server's current directory; when ``base_ref`` is omitted it defaults
+    to that directory's current branch. A default that cannot be resolved surfaces a
+    typed ``NoDefaultRepo`` / ``NoDefaultBaseRef`` as error-as-data (inside the try, so it
+    becomes the ``{ok:false, error:…}`` envelope like any other guard).
+    """
     try:
+        repos = inp.repos
+        if not repos:
+            repos = [await tasks.resolve_default_repo(runner=deps.runner)]
+        base_ref = inp.base_ref
+        if base_ref is None:
+            base_ref = await tasks.resolve_default_base_ref(runner=deps.runner)
         data = await tasks.create(
             inp.task_name,
             inp.description,
-            inp.repos,
-            base_ref=inp.base_ref,
+            repos,
+            base_ref=base_ref,
             runner=deps.runner,
             locks=deps.locks,
             store=deps.store,

@@ -78,11 +78,18 @@ def build_mcp(holder: _DepsHolder) -> FastMCP:
     @mcp.tool()
     async def create_task(
         task_name: str,
-        description: str,
-        repos: list[str],
+        description: str = "",
+        repos: list[str] | None = None,
         base_ref: str | None = None,
     ) -> dict:
         """Create a task spanning one or more repos.
+
+        Only ``task_name`` is required. ``description`` defaults to an empty string.
+        ``repos`` defaults to the git repository containing the server's current
+        directory (where ``dev-helper-mcp`` was launched); ``base_ref`` defaults to that
+        directory's currently checked-out branch. When an omitted argument's default
+        cannot be derived (the cwd is not a git repo / not on a branch), the call returns
+        a ``NoDefaultRepo`` / ``NoDefaultBaseRef`` error — pass the argument explicitly.
 
         Each repo gets an isolated worktree at ``<repo>.worktrees/<task>/`` on a
         new ``agent/<task>`` branch. Returns the ``{ok, data, error}`` envelope.
