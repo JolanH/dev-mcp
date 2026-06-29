@@ -121,6 +121,44 @@ Every tool returns the uniform `{ok, data, error}` envelope — on failure,
 Open the dashboard URL printed at startup in a browser to watch tasks and
 worktrees update live while you work.
 
+### Auto-mark tasks blocked when an agent needs you
+
+`blocked` is a self-reported status — by itself the server can't see that an
+agent paused on a question or permission prompt, so a stuck agent stays in the
+**Running** column. Wire a Claude Code **hook** to close that gap automatically:
+
+```jsonc
+// ~/.claude/settings.json  (global — fires in every session, any project/worktree)
+{
+  "hooks": {
+    "Notification": [
+      { "matcher": "idle_prompt",       "hooks": [{ "type": "command", "command": "dev-helper-mcp hook blocked" }] },
+      { "matcher": "permission_prompt", "hooks": [{ "type": "command", "command": "dev-helper-mcp hook blocked" }] },
+      { "matcher": "elicitation_dialog","hooks": [{ "type": "command", "command": "dev-helper-mcp hook blocked" }] }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "dev-helper-mcp hook running" }] }
+    ]
+  }
+}
+```
+
+`dev-helper-mcp hook <blocked|running>` reads the hook's `cwd` (from the stdin
+JSON payload), maps the agent's worktree path `<repo>.worktrees/<slug>` back to
+its task slug, and flips that task between `running` and `blocked` — and **only**
+that pair (a `review` or `done` task is never touched). It is best-effort and
+silent: if `cwd` isn't inside a task worktree, the slug isn't tracked, the server
+isn't running, or anything else goes wrong, it exits `0` without disturbing the
+agent. The change lands on the dashboard within one refresh (≤3 s).
+
+Limitations: the `Notification` matcher names are Claude Code–version-specific
+(the command itself just sets a state, so a mismatch only means "no auto-block",
+never a crash); this tracks top-level sessions — parallel **sub-agents** fire
+`SubagentStop`, not these events, and aren't disambiguated per task; and slug
+resolution is purely lexical, so a repo whose own directory name ends in
+`.worktrees` is unsupported (its ordinary subdirectories would look like task
+worktrees).
+
 ## Security
 
 - Binds loopback only — never `0.0.0.0`.

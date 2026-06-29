@@ -17,6 +17,7 @@ Coverage maps to the 4 ACs:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import signal
@@ -32,6 +33,7 @@ from dev_helper_mcp import cli, config, lock, server
 from dev_helper_mcp.config import BIND_HOST
 from dev_helper_mcp.dashboard.render import render_board
 from dev_helper_mcp.errors import PortUnavailable
+from dev_helper_mcp.store import Store
 
 
 # ── helpers ──
@@ -412,3 +414,151 @@ def test_real_instance_records_bound_port_then_stop_releases():
         if proc.poll() is None:
             proc.kill()
             proc.communicate()
+
+
+# ── hook entrypoint: slug resolution + best-effort status report ──
+#
+# Pure-path + tmp-DB tests — NO git, NO project repo. The cwd strings below are
+# fabricated paths (never touched on disk); the DB is a tmp_path state.db opened via
+# Store.open. The autouse _isolate_state_dir / _guard_project_repo_untouched fixtures
+# still apply.
+
+
+def _wt_cwd(base, slug: str) -> str:
+    """A fabricated path *inside* the worktree for ``slug`` (mirrors worktree_path_for:
+    ``<repo>.worktrees/<slug>``), pointing at a sub-directory to prove resolution walks
+    up. The path is never created on disk — slug resolution is pure arithmetic."""
+    return os.path.join(str(base), "tmms.worktrees", slug, "src", "main")
+
+
+def _seed_task(db_path: str, slug: str, status: str) -> None:
+    async def _go() -> None:
+        store = await Store.open(db_path)
+        try:
+            await store.add_task(
+                slug, "desc", status, "2026-06-29T00:00:00Z", "2026-06-29T00:00:00Z"
+            )
+        finally:
+            await store.close()
+
+    asyncio.run(_go())
+
+
+def _read_status(db_path: str, slug: str) -> str | None:
+    async def _go() -> str | None:
+        store = await Store.open(db_path)
+        try:
+            task = await store.get_task(slug)
+            return task["status"] if task else None
+        finally:
+            await store.close()
+
+    return asyncio.run(_go())
+
+
+@pytest.mark.parametrize(
+    ("cwd", "expected"),
+    [
+        ("/code/tmms.worktrees/dark-theme", "dark-theme"),  # worktree root
+        ("/code/tmms.worktrees/dark-theme/src/main", "dark-theme"),  # sub-directory
+        ("/code/tmms", None),  # main repo, not a worktree
+        ("/home/dev/projects", None),  # unrelated path
+        ("/code/.worktrees/foo", None),  # bare ".worktrees" (no repo prefix) ⇒ not a worktree
+        ("/code/tmms.worktrees/dark/../other", "other"),  # `..` normalised lexically first
+        ("/code/tmms.worktrees/dark/..", None),  # normalises to the .worktrees dir ⇒ None
+        ("/code/tmms.worktrees/dark-theme/", "dark-theme"),  # trailing slash
+    ],
+)
+def test_slug_from_worktree_cwd(cwd: str, expected: str | None) -> None:
+    assert config.slug_from_worktree_cwd(cwd) == expected
+
+
+def test_hook_blocked_flips_running_task(tmp_path) -> None:
+    db = str(tmp_path / "state.db")
+    _seed_task(db, "dark-theme", "running")
+    rc = cli.run_hook("blocked", cwd=_wt_cwd(tmp_path, "dark-theme"), db_path=db)
+    assert rc == 0
+    assert _read_status(db, "dark-theme") == "blocked"
+
+
+def test_hook_running_flips_blocked_task(tmp_path) -> None:
+    db = str(tmp_path / "state.db")
+    _seed_task(db, "dark-theme", "blocked")
+    rc = cli.run_hook("running", cwd=_wt_cwd(tmp_path, "dark-theme"), db_path=db)
+    assert rc == 0
+    assert _read_status(db, "dark-theme") == "running"
+
+
+@pytest.mark.parametrize("locked_status", ["review", "done"])
+def test_hook_blocked_never_clobbers_review_or_done(tmp_path, locked_status: str) -> None:
+    db = str(tmp_path / "state.db")
+    _seed_task(db, "dark-theme", locked_status)
+    rc = cli.run_hook("blocked", cwd=_wt_cwd(tmp_path, "dark-theme"), db_path=db)
+    assert rc == 0
+    assert _read_status(db, "dark-theme") == locked_status  # untouched
+
+
+@pytest.mark.parametrize("locked_status", ["running", "review", "done"])
+def test_hook_running_only_resumes_a_blocked_task(tmp_path, locked_status: str) -> None:
+    db = str(tmp_path / "state.db")
+    _seed_task(db, "dark-theme", locked_status)
+    rc = cli.run_hook("running", cwd=_wt_cwd(tmp_path, "dark-theme"), db_path=db)
+    assert rc == 0
+    assert _read_status(db, "dark-theme") == locked_status  # untouched
+
+
+def test_hook_noop_when_cwd_not_a_worktree(tmp_path) -> None:
+    db = str(tmp_path / "state.db")
+    _seed_task(db, "dark-theme", "running")
+    rc = cli.run_hook("blocked", cwd="/code/tmms", db_path=db)  # main repo
+    assert rc == 0
+    assert _read_status(db, "dark-theme") == "running"  # untouched
+
+
+def test_hook_untracked_slug_is_a_noop(tmp_path) -> None:
+    db = str(tmp_path / "state.db")
+    _seed_task(db, "other-task", "running")  # DB exists, but our resolved slug isn't in it
+    rc = cli.run_hook("blocked", cwd=_wt_cwd(tmp_path, "ghost"), db_path=db)
+    assert rc == 0
+    assert _read_status(db, "ghost") is None
+    assert _read_status(db, "other-task") == "running"  # untouched
+
+
+def test_hook_does_not_create_db_when_absent(tmp_path) -> None:
+    # A notification hook must NOT materialise the state dir / DB when no server has run.
+    db = str(tmp_path / "state.db")
+    rc = cli.run_hook("blocked", cwd=_wt_cwd(tmp_path, "dark-theme"), db_path=db)
+    assert rc == 0
+    assert not os.path.exists(db)  # the hook did not create it
+
+
+@pytest.mark.parametrize("state", [None, "bogus"])
+def test_hook_invalid_state_exits_zero(tmp_path, state) -> None:
+    db = str(tmp_path / "state.db")
+    _seed_task(db, "dark-theme", "running")
+    assert cli.run_hook(state, cwd=_wt_cwd(tmp_path, "dark-theme"), db_path=db) == 0
+    assert _read_status(db, "dark-theme") == "running"  # untouched
+
+
+def test_hook_reads_cwd_from_stdin_payload(tmp_path) -> None:
+    db = str(tmp_path / "state.db")
+    _seed_task(db, "dark-theme", "running")
+    stdin = json.dumps({"hook_event_name": "Notification", "cwd": _wt_cwd(tmp_path, "dark-theme")})
+    rc = cli.run_hook("blocked", stdin_text=stdin, db_path=db)
+    assert rc == 0
+    assert _read_status(db, "dark-theme") == "blocked"
+
+
+def test_hook_malformed_stdin_falls_back_to_getcwd(tmp_path) -> None:
+    # Bad JSON ⇒ fall back to os.getcwd() (the project repo under pytest), which is not a
+    # worktree ⇒ slug None ⇒ clean no-op, exit 0 (never raises).
+    db = str(tmp_path / "state.db")
+    _seed_task(db, "dark-theme", "running")
+    assert cli.run_hook("blocked", stdin_text="not json {", db_path=db) == 0
+    assert _read_status(db, "dark-theme") == "running"  # untouched
+
+
+def test_hook_parser_accepts_hook_state() -> None:
+    args = cli.parse_args(["hook", "blocked"])
+    assert args.command == "hook"
+    assert args.state == "blocked"

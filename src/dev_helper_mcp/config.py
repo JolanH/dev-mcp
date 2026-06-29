@@ -124,6 +124,32 @@ def branch_name_for(slug: str) -> str:
     return f"{BRANCH_PREFIX}{slug}"
 
 
+def slug_from_worktree_cwd(cwd: str | Path) -> str | None:
+    """Recover a task slug from a directory inside its worktree — the inverse of
+    :func:`worktree_path_for`.
+
+    ``worktree_path_for`` maps ``(repo, slug)`` -> ``<repo>.worktrees/<slug>``, so the
+    slug is the path segment whose *parent* directory name ends with
+    ``WORKTREE_DIR_SUFFIX``. Walk ``cwd`` and its ancestors (so it works from any
+    sub-directory of the worktree, not just its root) and return the first such
+    segment. Returns ``None`` when ``cwd`` is not inside a task worktree (e.g. the main
+    repo, or anywhere outside one) — the caller treats that as "no task to update".
+
+    Pure path arithmetic: no filesystem or git access, so it is deterministic and
+    unit-testable without a real worktree. ``cwd`` is normalised lexically first
+    (``os.path.normpath`` collapses ``.``/``..`` without I/O) so a path like
+    ``<repo>.worktrees/<slug>/..`` does not mis-resolve to ``<slug>``.
+    """
+    path = Path(os.path.normpath(os.fspath(cwd)))
+    for ancestor in (path, *path.parents):
+        parent = ancestor.parent
+        if parent.name.endswith(WORKTREE_DIR_SUFFIX) and len(parent.name) > len(
+            WORKTREE_DIR_SUFFIX
+        ):
+            return ancestor.name
+    return None
+
+
 # ── Task status lifecycle (core/tasks.py update_task) ──
 
 #: The four legal task statuses. Mirrors the SQL ``CHECK`` in ``store.py`` — keep the

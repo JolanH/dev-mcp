@@ -18,10 +18,13 @@ edits them.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import logging
 import os
+import select
 import signal
+import sys
 import time
 
 from . import config, lock, server
@@ -35,6 +38,10 @@ logger = logging.getLogger(__name__)
 _STOP_WAIT_SECONDS = 10.0
 #: Poll cadence while waiting for the lockfile to disappear.
 _STOP_POLL_INTERVAL = 0.05
+#: Max seconds the ``hook`` command waits for its stdin payload before giving up and
+#: falling back to ``os.getcwd()`` — bounds the worst case so an idle/never-closed stdin
+#: (a TTY, a misbehaving harness) can never hang the agent's turn.
+_HOOK_STDIN_WAIT_SECONDS = 1.0
 
 
 def _configure_logging() -> None:
@@ -58,9 +65,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "command",
         nargs="?",
-        choices=["stop"],
+        choices=["stop", "hook"],
         default=None,
-        help="'stop' to signal the running instance to shut down and release the lock.",
+        help="'stop' to signal the running instance to shut down and release the lock; "
+        "'hook <blocked|running>' is the Claude Code hook entrypoint (best-effort task "
+        "status report — see README).",
+    )
+    parser.add_argument(
+        "state",
+        nargs="?",
+        choices=["blocked", "running"],
+        default=None,
+        help="Target status for the 'hook' command: 'blocked' (agent awaiting input) or "
+        "'running' (operator answered). Ignored by other commands.",
     )
     parser.add_argument(
         "--port",
@@ -208,9 +225,136 @@ def stop_instance() -> int:
     return 1
 
 
+# ── hook entrypoint (Claude Code Notification / UserPromptSubmit) ──
+
+#: The ONLY status transition each hook state is allowed to drive, keyed by target
+#: status -> the single ``current`` status it may flip from. ``blocked`` applies only
+#: to a ``running`` task; ``running`` (resume) applies only to a ``blocked`` task. This
+#: keeps the hook from ever clobbering ``review``/``done`` (a notification or a prompt
+#: submitted while a task is awaiting review or closed must not move it).
+_HOOK_REQUIRED_CURRENT = {"blocked": "running", "running": "blocked"}
+
+
+def run_hook(
+    state: str | None,
+    *,
+    stdin_text: str | None = None,
+    cwd: str | None = None,
+    db_path: str | None = None,
+) -> int:
+    """Best-effort task-status report for a Claude Code hook. ALWAYS returns 0.
+
+    Resolves the task slug from the agent's worktree (the hook's ``cwd``, read from the
+    stdin JSON payload or ``os.getcwd()``) and flips that task between ``running`` and
+    ``blocked`` — and ONLY that pair (see :data:`_HOOK_REQUIRED_CURRENT`). Every failure
+    mode — no task slug in ``cwd``, an unknown ``state``, an untracked slug, a missing
+    DB, an illegal transition, or any unexpected error — is swallowed with at most one
+    stderr line and exits 0. The function is engineered to neither raise nor hang: stdin
+    reading is time-bounded and even the diagnostic output is suppressed on failure, so a
+    hook can never block, crash, or non-zero-exit an agent's turn.
+
+    ``stdin_text`` / ``cwd`` / ``db_path`` are injectable for unit tests; in production
+    they default to real stdin, the resolved cwd, and the machine-global DB.
+    """
+    try:
+        if state not in _HOOK_REQUIRED_CURRENT:
+            _hook_warn("missing/invalid state (expected blocked|running)")
+            return 0
+
+        if cwd is None:
+            cwd = _hook_cwd(stdin_text)
+        slug = config.slug_from_worktree_cwd(cwd)
+        if not slug:
+            # Not inside a task worktree (e.g. the main repo) — nothing to report.
+            return 0
+
+        import asyncio
+
+        asyncio.run(_apply_hook_status(slug, state, db_path))
+    except Exception:  # noqa: BLE001 — a hook must never surface an error to the agent.
+        # Even the diagnostics are guarded: a hook's stderr pipe is often closed by the
+        # harness, and an unguarded write (BrokenPipeError) would defeat "always exit 0".
+        with contextlib.suppress(Exception):
+            logger.debug("hook: status report failed; ignoring", exc_info=True)
+        _hook_warn("status report skipped (see DEV_HELPER_LOG=DEBUG)")
+    return 0
+
+
+def _hook_warn(message: str) -> None:
+    """Emit a single best-effort stderr line for the hook; NEVER raises. A closed stderr
+    pipe (common when a harness runs a hook) must not break the always-exit-0 contract."""
+    with contextlib.suppress(Exception):
+        print(f"{APP_NAME}: hook: {message}", file=sys.stderr)
+
+
+def _hook_cwd(stdin_text: str | None) -> str:
+    """Resolve the hook's working directory: the ``cwd`` field of the stdin JSON payload
+    Claude Code sends, falling back to the process cwd when absent/unparseable.
+
+    The result is passed through ``os.path.realpath`` so a symlinked worktree resolves to
+    its real ``<repo>.worktrees/<slug>`` location (realpath is lexical for any
+    non-existent tail, so a fabricated/absent cwd still normalises cleanly)."""
+    if stdin_text is None:
+        stdin_text = _read_stdin_bounded()
+    cwd = ""
+    if stdin_text:
+        try:
+            payload = json.loads(stdin_text)
+        except ValueError:
+            payload = None
+        if isinstance(payload, dict) and isinstance(payload.get("cwd"), str) and payload["cwd"]:
+            cwd = payload["cwd"]
+    if not cwd:
+        cwd = os.getcwd()
+    return os.path.realpath(cwd)
+
+
+def _read_stdin_bounded() -> str:
+    """Read the hook's stdin payload without ever blocking indefinitely.
+
+    Claude Code writes the JSON payload then closes stdin (EOF), but a hook may also be
+    invoked against an idle TTY or a pipe that never closes — a bare ``sys.stdin.read()``
+    would then hang forever and stall the agent's turn. Skip a TTY outright and otherwise
+    wait at most ``_HOOK_STDIN_WAIT_SECONDS`` for stdin to become readable."""
+    try:
+        if sys.stdin is None or sys.stdin.isatty():
+            return ""
+        ready, _, _ = select.select([sys.stdin], [], [], _HOOK_STDIN_WAIT_SECONDS)
+        return sys.stdin.read() if ready else ""
+    except Exception:  # noqa: BLE001 — any stdin/select quirk → fall back to os.getcwd().
+        return ""
+
+
+async def _apply_hook_status(slug: str, state: str, db_path: str | None) -> None:
+    """Open the store, read ``slug``, and apply the hook transition iff the task is in
+    the one ``current`` status that state is allowed to flip from. No-op otherwise.
+
+    If the DB file does not exist yet, return immediately: no server has ever run, so
+    there is nothing to report — and a mere notification hook must NOT create the
+    machine-global state dir / DB as a side effect."""
+    from .core import tasks
+    from .store import Store
+
+    effective_db = config.default_db_path() if db_path is None else db_path
+    if not os.path.exists(effective_db):
+        return
+
+    store = await Store.open(effective_db)
+    try:
+        task = await store.get_task(slug)
+        if task is None or task["status"] != _HOOK_REQUIRED_CURRENT[state]:
+            return
+        await tasks.update_task(slug, status=state, store=store)
+    finally:
+        await store.close()
+
+
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     _configure_logging()
+
+    if args.command == "hook":
+        raise SystemExit(run_hook(args.state))
 
     if args.command == "stop" or args.release_lock:
         raise SystemExit(stop_instance())
