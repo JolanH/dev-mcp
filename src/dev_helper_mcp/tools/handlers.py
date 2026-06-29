@@ -62,6 +62,9 @@ async def create_task(inp: CreateTaskIn, *, deps: ToolDeps) -> dict:
         await deps.cache.refresh()
         return {"ok": True, "data": data, "error": None}
     except DevHelperError as exc:
+        # Diagnosable from stderr without leaking user content: log the stable
+        # error.code only — never the description/annotation body (NFR-7).
+        logger.info("create_task failed: %s", exc.code)
         return {"ok": False, "data": None, "error": exc.as_dict()}
     except Exception:  # noqa: BLE001 — never leak a stack trace through the tool
         logger.exception("unexpected error in create_task")
@@ -79,6 +82,7 @@ async def list_worktrees(inp: ListWorktreesIn, *, deps: ToolDeps) -> dict:
         )
         return {"ok": True, "data": data, "error": None}
     except DevHelperError as exc:
+        logger.info("list_worktrees failed: %s", exc.code)
         return {"ok": False, "data": None, "error": exc.as_dict()}
     except Exception:  # noqa: BLE001 — never leak a stack trace through the tool
         logger.exception("unexpected error in list_worktrees")
@@ -102,6 +106,7 @@ async def remove_worktree(inp: RemoveWorktreeIn, *, deps: ToolDeps) -> dict:
         await deps.cache.refresh()
         return {"ok": True, "data": data, "error": None}
     except DevHelperError as exc:
+        logger.info("remove_worktree failed: %s", exc.code)
         return {"ok": False, "data": None, "error": exc.as_dict()}
     except Exception:  # noqa: BLE001 — never leak a stack trace through the tool
         logger.exception("unexpected error in remove_worktree")
@@ -121,6 +126,7 @@ async def update_task(inp: UpdateTaskIn, *, deps: ToolDeps) -> dict:
         await deps.cache.refresh()
         return {"ok": True, "data": data, "error": None}
     except DevHelperError as exc:
+        logger.info("update_task failed: %s", exc.code)
         return {"ok": False, "data": None, "error": exc.as_dict()}
     except Exception:  # noqa: BLE001 — never leak a stack trace through the tool
         logger.exception("unexpected error in update_task")
@@ -133,6 +139,7 @@ async def list_tasks(inp: ListTasksIn, *, deps: ToolDeps) -> dict:
         data = await tasks.list_tasks(status=inp.status, repo=inp.repo, store=deps.store)
         return {"ok": True, "data": data, "error": None}
     except DevHelperError as exc:
+        logger.info("list_tasks failed: %s", exc.code)
         return {"ok": False, "data": None, "error": exc.as_dict()}
     except Exception:  # noqa: BLE001 — never leak a stack trace through the tool
         logger.exception("unexpected error in list_tasks")

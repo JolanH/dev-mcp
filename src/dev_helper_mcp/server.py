@@ -19,7 +19,7 @@ import uvicorn
 
 from . import lock
 from .config import BIND_HOST, PORT_RANGE
-from .errors import InstanceConflict
+from .errors import InstanceConflict, PortUnavailable
 from .server_factory import create_app
 
 logger = logging.getLogger(__name__)
@@ -72,6 +72,39 @@ def _bind_scanning(host: str, port_range: range) -> socket.socket:
     )
 
 
+def _bind_strict(host: str, port: int) -> socket.socket:
+    """Bind EXACTLY ``port`` or raise ``PortUnavailable`` — no fallback (AC1).
+
+    This is the headline Story 3.2 behaviour change: Story 1.1 *scanned* when an
+    explicit ``--port`` was occupied; an explicit port is now bind-exactly-or-fail.
+    ``lock.bind_socket`` surfaces ``EADDRINUSE`` as ``InstanceConflict`` (its generic
+    "something is on this port" signal); for the strict-``--port`` case we translate
+    that to the specific ``PortUnavailable`` code (distinct from ``InstanceConflict``,
+    which means another dev-helper-mcp holds the lock — see project-context taxonomy).
+    """
+    try:
+        return lock.bind_socket(host, port)
+    except InstanceConflict as exc:
+        raise PortUnavailable(
+            f"port {port} is already in use; refusing to bind "
+            f"(explicit --port is strict, no fallback scan)",
+            details={"host": host, "port": port},
+        ) from exc
+
+
+def _resolve_bind(port: int | None) -> socket.socket:
+    """Select the bind strategy and return a listening socket (AC1).
+
+    ``port is None`` ⇒ scan ``8765→8775`` for the first free port (the default).
+    An explicit ``port`` ⇒ strict bind-exactly-or-``PortUnavailable`` — never a scan
+    fallback. Isolated from ``run`` so the strict-vs-scan selection is unit-testable
+    without standing up uvicorn (inject/stub the two bind helpers).
+    """
+    if port is None:
+        return _bind_scanning(BIND_HOST, PORT_RANGE)
+    return _bind_strict(BIND_HOST, port)
+
+
 def _install_release(handle: lock.LockHandle) -> None:
     """Ensure the lock is released on clean shutdown.
 
@@ -102,22 +135,15 @@ def run(port: int | None = None) -> None:
     The bound socket is the authoritative single-instance mutex; the lockfile is
     the diagnostic/fast-path guard (it also catches a live instance on a *different*
     port). The lock is released on clean shutdown via ``atexit``/signal/``finally``.
-    """
-    if port is None:
-        sock = _bind_scanning(BIND_HOST, PORT_RANGE)
-    else:
-        try:
-            sock = lock.bind_socket(BIND_HOST, port)
-        except InstanceConflict:
-            # 3.1 keeps the Story 1.1 scan fallback; strict --port is Story 3.2.
-            logger.warning(
-                "Requested port %s is unavailable; scanning %d-%d for a free port",
-                port,
-                PORT_RANGE.start,
-                PORT_RANGE.stop - 1,
-            )
-            sock = _bind_scanning(BIND_HOST, PORT_RANGE)
 
+    ``port is None`` scans ``8765→8775``; an explicit ``port`` is strict
+    (bind-exactly-or-``PortUnavailable``, no fallback — AC1, Story 3.2).
+    """
+    sock = _resolve_bind(port)
+
+    # The ACTUAL bound port (not the requested one) is what gets recorded in the
+    # lockfile via acquire() and printed in the URL below — on the default scan the
+    # chosen port often differs from DEFAULT_PORT, and `stop` must find the real one.
     bound_port = sock.getsockname()[1]
     try:
         handle = lock.acquire(bound_port)

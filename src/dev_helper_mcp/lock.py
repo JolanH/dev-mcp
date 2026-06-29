@@ -64,19 +64,32 @@ class LockHandle:
         """Remove the lockfile if this process still owns it; otherwise a no-op."""
         if self._released:
             return
-        self._released = True
         try:
             with open(self.path, encoding="utf-8") as fh:
                 current = json.load(fh)
         except OSError, ValueError:
             # Gone or unreadable — nothing of ours left to remove.
+            self._released = True
             return
-        if current.get("pid") == self.pid and current.get("identity") == self.identity:
-            try:
-                os.remove(self.path)
-            except FileNotFoundError:
-                pass
-            logger.info("Released single-instance lock (pid=%s, port=%s)", self.pid, self.port)
+        if not (
+            isinstance(current, dict)
+            and current.get("pid") == self.pid
+            and current.get("identity") == self.identity
+        ):
+            # Reclaimed by another instance, or corrupt/non-object JSON — never our
+            # lock to delete (an ``isinstance`` guard also avoids ``AttributeError``
+            # on a valid-JSON non-dict like ``42``/``[]``).
+            self._released = True
+            return
+        # A non-``FileNotFoundError`` ``os.remove`` failure (e.g. EACCES/EBUSY) leaves
+        # ``_released`` False and propagates, so a later atexit/``finally`` call retries
+        # rather than silently leaking the lock. Only mark released on a confirmed remove.
+        try:
+            os.remove(self.path)
+        except FileNotFoundError:
+            pass  # already gone — treat as released
+        self._released = True
+        logger.info("Released single-instance lock (pid=%s, port=%s)", self.pid, self.port)
 
 
 # ── OS identity token + liveness (Task 2) ──
@@ -210,6 +223,9 @@ def _resolve_existing(
         # Unparseable/corrupt ⇒ treat as stale.
         return _reclaim(path, pid, port, identity)
 
+    if not isinstance(existing, dict):
+        # Valid JSON but not an object (e.g. a bare number/list) ⇒ corrupt ⇒ stale.
+        return _reclaim(path, pid, port, identity)
     existing_pid = existing.get("pid")
     existing_identity = existing.get("identity", _DEGRADED_IDENTITY)
     # A live, identity-matched holder refuses; anything else is stale ⇒ reclaim.

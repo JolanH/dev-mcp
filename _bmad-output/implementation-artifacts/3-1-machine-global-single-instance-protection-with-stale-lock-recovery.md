@@ -4,7 +4,7 @@ baseline_commit: afa513ea533f2b93a9df15d606b394d89c383222
 
 # Story 3.1: Machine-global single-instance protection with stale-lock recovery
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -92,6 +92,16 @@ _Adversarial code review 2026-06-26 (Blind Hunter + Edge Case Hunter + Acceptanc
 - [x] [Review][Defer] Signal handler runs file I/O (`open`+`json.load`+`os.remove`) inside `release()` [src/dev_helper_mcp/server.py:75-90] — deferred, low-risk (Python delivers signals at bytecode boundaries); the story mandated signal-handler release.
 - [x] [Review][Defer] `state_dir()` existing as a regular file → raw `OSError` (not typed) at startup [src/dev_helper_mcp/lock.py:225] — deferred, extreme operator-error edge.
 - [x] [Review][Defer] `os.write` short-write unchecked in `_reclaim`/`acquire` [src/dev_helper_mcp/lock.py:187,233] — deferred, self-healing (next acquire reclaims a corrupt file) and negligible for an ~80-byte payload.
+
+### Review Findings — 2026-06-29 (re-review: Blind Hunter + Edge Case Hunter + Acceptance Auditor)
+
+_All 5 ACs re-confirmed SATISFIED with tests (Acceptance Auditor). The prior review's 4 open `[Patch]` items are in fact ALREADY implemented in the code under review (verified directly): unsafe-PID guard present (lock.py:219-223); per-PID `/proc`-miss vs platform-degrade distinguished (lock.py:159-171); socket-FD-leak fix — `create_app`/uvicorn now inside the `try`/`finally` (server.py:131-145); the "single startup warning" docstring is reworded. **Recommend ticking those 4 boxes — they are stale, not open.** 12 findings dismissed as noise/false-positive, incl. the `except OSError, ValueError:` "SyntaxError" (re-verified valid PEP 758 — `py_compile` clean on the project's Python 3.14.2), the SO_REUSEADDR "weakened mutex" (Linux loopback still raises EADDRINUSE), and a `config`-module-shadow that does not exist (server.py imports `from .config import …`, binding no `config` name)._
+
+- [x] [Review][Decision] **RESOLVED 2026-06-29 — ACCEPTED as a known deviation (operator decision).** Out-of-scope dashboard changes bundled into the 3.1 commit — commit `b236b90` ("3-1") also rewrites `src/dev_helper_mcp/dashboard/static/poller.js` (three unrelated Epic-2 fixes: `updateFreshness` NaN-threshold guard, `applyUnavailable` trailing-separator cleanup, `applyOrphans` signature keyed on `[task_id, repo, branch]`) plus a stray 2-4c entry appended to `deferred-work.md`. The story's File List omits `poller.js` and "Project Structure Notes" list the dashboard as UNCHANGED. No functional regression seen; the scope-fence/one-commit-per-story break is accepted as-is. (The poller.js internal edge cases are tracked under the `[Review][Defer]` item below for re-homing to the Epic-2 dashboard story.)
+- [x] [Review][Patch] **FIXED 2026-06-29.** Valid-JSON-but-non-dict lockfile raises `AttributeError` instead of being treated as corrupt — `existing.get(...)`/`current.get(...)` run on `json.load` output; a non-dict (`42`, `[]`) passes the `except OSError, ValueError` (only `JSONDecodeError` is caught) and crashes `.get` — at startup in `_resolve_existing` (which is meant to reclaim corrupt files) and in the signal/atexit/finally shutdown path in `release()`. Added an `isinstance(..., dict)` guard → reclaim in `_resolve_existing`, no-op in `release()`. [src/dev_helper_mcp/lock.py:74, 213]
+- [x] [Review][Patch] **FIXED 2026-06-29.** `release()` set `self._released = True` before confirming removal — a non-`FileNotFoundError` `os.remove` failure (e.g. EACCES/EBUSY) then propagated while the flag was already set, so the atexit/finally retry no-op'd and the lock leaked. Now `_released` is set only after a confirmed remove / confirmed not-owned / already-gone, leaving a transient failure retryable. [src/dev_helper_mcp/lock.py:67]
+- [x] [Review][Defer] Lock file-I/O hardening against hostile filesystem states — `_reclaim`/`acquire` leak a `server.lock.tmp.<pid>` and surface a raw `OSError` (not a typed startup error) when `os.write`/`os.replace`/`os.open(O_EXCL)`/`mkdir` fail (ENOSPC, EACCES, EROFS, or `state_dir()` existing as a regular file) [src/dev_helper_mcp/lock.py:191-197,241,244-245] — deferred, low-risk operator/fs edge, self-limiting, same class as the already-deferred `state_dir()`-as-file and short-write items; worth a single hardening pass.
+- [x] [Review][Defer] poller.js internal edge cases — `updateFreshness` guards only `isNaN`, not `threshold <= 0`; the trailing-space cleanup matches by `textContent === " "` (could strip a line's own separator); `diff`/orphan keys fall back to `"undefined"`/`""` for objects missing `task_id` [src/dev_helper_mcp/dashboard/static/poller.js] — deferred, belongs to the Epic 2 dashboard story that should own this code (not caused by the 3.1 lock work, and not reviewable against the 3.1 spec).
 
 ## Dev Notes
 

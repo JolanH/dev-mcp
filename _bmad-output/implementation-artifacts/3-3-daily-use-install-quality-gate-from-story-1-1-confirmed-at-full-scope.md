@@ -1,6 +1,10 @@
+---
+baseline_commit: b236b90563c5c6da8de787b1ea6a5ade8ca13830
+---
+
 # Story 3.3: Daily-use install (quality gate from Story 1.1 confirmed at full scope)
 
-Status: ready-for-dev
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -43,24 +47,24 @@ AC2's literal text says the pre-commit hook enforces `ruff check` + `ruff format
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1 — Confirm the daily-use install (AC: 1)**
-  - [ ] Verify `pyproject.toml` already exposes `[project.scripts] dev-helper-mcp = "dev_helper_mcp.cli:main"` (it does, from Story 1.1) and `[build-system] build-backend = "uv_build"`, `requires-python = ">=3.14"`, deps `mcp>=1.28,<2` + `aiosqlite>=0.22.1`. No change expected unless something drifted.
-  - [ ] **End-to-end install smoke (manual / opt-in, document it):** `uv build` → `uv tool install dist/dev_helper_mcp-<ver>-py3-none-any.whl` (or `uv tool install .`) → `dev-helper-mcp --help` runs from an arbitrary directory; `python -m dev_helper_mcp` also works (`__main__.py` → `cli.main()`). Capture the exact commands in the README / a docs section so it is reproducible. (A full `uv tool install` in pytest is heavy and environment-mutating — keep this as a documented manual/`@pytest.mark.slow` opt-in, not a default-suite test.)
-  - [ ] **README install section:** add/confirm a short "Install" section (`uv tool install` / pipx, run `dev-helper-mcp`, `dev-helper-mcp --port N`, `dev-helper-mcp stop`) so the daily-use path is documented. (`--port`/`stop` come from Story 3.2.)
-- [ ] **Task 2 — Confirm the quality gate scales to the full v1 suite (AC: 2)** — *see the CRITICAL reconciliation above; resolve Decision A first*
-  - [ ] Run the complete gate over Epics 1–3: `uv run ruff check . && uv run ruff format --check . && uv run pytest -m "not slow"` **and** `node --test tests/js/`, plus the slow suite at least once (`uv run pytest -m slow`, incl. the real-port smoke + 3.1/3.2 lock/lifecycle slow tests). All green = the gate scales.
-  - [ ] **Do NOT modify `.githooks/pre-commit` to add `pytest` without an explicit operator OK** (Decision A). If the operator confirms the gate stays ruff-in-hook + manual tests, this AC is satisfied by demonstrating the full manual gate is green over the complete suite and documenting the run command; add a short "Quality gate" docs note describing the real split (hook = ruff; tests = manual) so future contributors aren't surprised.
-  - [ ] Confirm the dashboard browser-free tests still hold at full scope (HTML-output asserts, static CSS/JS lint for motion/external-asset tokens, WCAG-contrast math, `node --test` for the poller `diff()`), and the adapter-seam test is green.
-- [ ] **Task 3 — CI-readiness (AC: 3)**
-  - [ ] Confirm the suite is CI-ready *as-is*: every test uses a tmp/`:memory:` DB and the autouse `XDG_STATE_HOME` redirect + `tmp_git_repo`; nothing depends on an absolute local path, the developer's `$HOME`, or interactive input. A future CI runner can run `uv run ruff check . && uv run ruff format --check . && uv run pytest` (and `node --test tests/js/`) unchanged. **No CI config file is required for v1** (the architecture says "no CI in v1"); AC3 is a *property* of the suite, not a new artifact — assert/document it, do not add a `.github/workflows` unless the operator asks.
-  - [ ] (Optional, only if operator wants it) a minimal CI workflow could be added as a convenience, but it is explicitly out of the v1 requirement — leave deferred unless requested.
-- [ ] **Task 4 — Logging audit (AC: 4)**
-  - [ ] Confirm `cli._configure_logging()` reads `DEV_HELPER_LOG` (default `INFO`), logs to **stderr** (stdlib `logging.basicConfig` default stream), and every module uses `logging.getLogger(__name__)`. (All present from Story 1.1 + later stories.)
-  - [ ] **Audit for "sufficient to diagnose a failed tool call or an orphaned link" + "never secrets / full annotation contents at INFO":** walk the log call sites (`tools/handlers.py`, `git/runner.py`, `core/*`, `cache.py`, the projection/orphan path) and confirm: a failed tool call logs its `error.code` + a short message (enough to diagnose) **without** dumping full task descriptions/annotation bodies at `INFO`; an orphaned link is logged/visible enough to diagnose. Add the minimal missing log lines (e.g. a `logger.warning` when the projection surfaces an `orphan_link:` / a `repo_unavailable:`) **only if** diagnosis is currently impossible — keep it minimal and `INFO`/`WARNING`-appropriate. There are no secrets in this app, but task descriptions are user content → keep them out of `INFO` (log `task_id`/`status`/`code`, not the description body).
-  - [ ] **Test (fast):** a focused `tests/test_logging.py` (or extend an existing test) asserting (a) `DEV_HELPER_LOG=DEBUG` raises the effective level and the default is `INFO`; (b) a representative failed-tool / orphan path logs the diagnostic fields and does **not** emit a full annotation/description body at `INFO` (assert via `caplog` that the description string is absent from `INFO` records). Drive without real git where possible (hand-built inputs); any git path uses `tmp_git_repo`.
-- [ ] **Task 5 — Gate green + close out Epic 3 / v1** (AC: all)
-  - [ ] Full manual gate green over the complete suite (ruff + `pytest -m "not slow"` + `node --test tests/js/`, plus slow at least once). `tests/test_adapter_seam.py` green. No schema/git/tool-surface change.
-  - [ ] This is the last v1 story: after it merges, `epic-3` can move toward `done` and a retrospective. Do not expand scope beyond confirmation + the minimal logging/README additions.
+- [x] **Task 1 — Confirm the daily-use install (AC: 1)**
+  - [x] Verify `pyproject.toml` already exposes `[project.scripts] dev-helper-mcp = "dev_helper_mcp.cli:main"` (it does, from Story 1.1) and `[build-system] build-backend = "uv_build"`, `requires-python = ">=3.14"`, deps `mcp>=1.28,<2` + `aiosqlite>=0.22.1`. **Confirmed unchanged — no drift.**
+  - [x] **End-to-end install smoke (manual / opt-in, document it):** documented in the README "Install" section (`uv build` → `uv tool install dist/…whl`, or `uv tool install .` / `pipx install .`; `dev-helper-mcp` runs from any dir; `python -m dev_helper_mcp` equivalent). Kept as a documented manual step, NOT a default-suite test (a full `uv tool install` is heavy + environment-mutating).
+  - [x] **README install section:** added an "Install" section (`uv tool install` / pipx, `dev-helper-mcp`, `dev-helper-mcp --port N`, `dev-helper-mcp stop`). The stale "1.1 walking skeleton / no real git/DB/tools/dashboard / ping" copy was replaced with the real v1 description.
+- [x] **Task 2 — Confirm the quality gate scales to the full v1 suite (AC: 2)** — *Decision A resolved: operator chose "keep hook ruff-only" (2026-06-29)*
+  - [x] Ran the complete gate over Epics 1–3: `ruff check .` + `ruff format --check .` + `pytest -m "not slow"` (314 passed) **and** `node --test tests/js/` (53 passed), plus `pytest -m slow` (10 passed — real-port smoke + 3.1/3.2 lock/lifecycle). **All green = the gate scales.**
+  - [x] **`.githooks/pre-commit` left UNCHANGED (ruff-only).** Operator sign-off (Decision A, 2026-06-29) = keep the hook ruff-only; tests stay manual. AC2 satisfied by the green full manual gate + a README "Quality gate (the real split)" note documenting hook = ruff / tests = manual. Also surfaced (operator declined for this story): the hook runs `ruff format .` rather than `ruff format --check .` — left as-is per operator choice.
+  - [x] Confirmed the dashboard browser-free tests hold at full scope (HTML-output asserts, static CSS/JS lint, WCAG-contrast math, `node --test` poller `diff()`/patch) and `tests/test_adapter_seam.py` is green.
+- [x] **Task 3 — CI-readiness (AC: 3)**
+  - [x] Confirmed the suite is CI-ready *as-is*: every test uses a tmp/`:memory:` DB + the autouse `XDG_STATE_HOME` redirect + `tmp_git_repo` (see `tests/conftest.py`); nothing depends on an absolute path, `$HOME`, or interactive input. A future CI runner runs the documented commands unchanged. **No CI config file added** (v1 = no CI; AC3 is a property of the suite). Documented in a README "CI-readiness" note.
+  - [x] (Optional CI workflow) operator did not request it — left deferred per the v1 requirement.
+- [x] **Task 4 — Logging audit (AC: 4)**
+  - [x] Confirmed `cli._configure_logging()` reads `DEV_HELPER_LOG` (default `INFO`), logs to **stderr** (`basicConfig` default), and every module uses `logging.getLogger(__name__)` (9 modules).
+  - [x] **Audit result:** the `repo_unavailable:` and total-failure paths already log at `WARNING` with `error.code` only (cache.py, core/worktrees.py); `orphan_link:` is surfaced in `/state` + the dashboard (diagnosable). **One real gap:** a *typed* `DevHelperError` tool failure logged nothing server-side (only the unexpected/`Internal` path logged). Added a minimal `logger.info("<tool> failed: %s", exc.code)` on each of the 5 handler typed-error branches — **`error.code` only, never the description/annotation body** (NFR-7). No orphan-link log added: it is already diagnosable via `/state`/dashboard and per-tick logging would be noisy (kept minimal).
+  - [x] **Test (fast):** added `tests/test_logging.py` — (a) default level `INFO`, `DEV_HELPER_LOG=DEBUG` raises the effective level, unknown value falls back to `INFO`, stream is stderr (not stdout); (b) the `update_task`→`TaskNotFound` path (git-free, tmp `Store`) logs the `error.code` at INFO and **does not** emit the user description body (asserted absent via `caplog`).
+- [x] **Task 5 — Gate green + close out Epic 3 / v1** (AC: all)
+  - [x] Full manual gate green over the complete suite: ruff (check + format --check, 56 files) + `pytest -m "not slow"` (314) + `node --test tests/js/` (53) + `pytest -m slow` (10). `tests/test_adapter_seam.py` green. No schema/git/tool-surface change (5 tools unchanged).
+  - [x] This is the last v1 story. Scope held to confirmation + the minimal logging diagnostic line + README. `epic-3` can now move toward `done` + retrospective.
 
 ## Dev Notes
 
@@ -138,16 +142,46 @@ The architecture/epics text for AR-12/Story 3.3 says the pre-commit hook runs `r
 
 ### Agent Model Used
 
-_TBD — set by dev-story._
+claude-opus-4-8[1m] (Opus 4.8, 1M context)
 
 ### Debug Log References
 
+- Full manual gate (post-change, complete Epics 1–3 suite): `ruff check .` ✅ + `ruff format --check .` ✅ (56 files) + `pytest -m "not slow"` → **314 passed** + `node --test tests/js/` → **53 passed** + `pytest -m slow` → **10 passed** + `tests/test_adapter_seam.py` ✅.
+- RED→GREEN for the logging gap: `tests/test_logging.py::test_failed_tool_logs_code_but_not_description_body` failed before the handler change (no server-side trace for a typed error), passed after.
+
 ### Completion Notes List
 
+- **This was a confirmation + packaging-docs + logging-audit story (the v1 closer), not a feature build.** No schema, git, endpoint, or tool-surface change — the 5 tools are unchanged.
+- **Decision A (operator sign-off obtained 2026-06-29): keep `.githooks/pre-commit` ruff-only.** AC2's literal "hook runs ruff + pytest" was reconciled against the live reality (operator decision 2026-06-25: hook = ruff; tests = manual). The dev agent did **not** re-arm pytest in the hook. AC2 is satisfied by demonstrating the full manual gate (ruff + `pytest -m "not slow"` + `node --test tests/js/` + slow once) green over the complete suite, plus a README "Quality gate (the real split)" note. Also surfaced the hook's `ruff format .` (mutates) vs `ruff format --check .` (checks) discrepancy; operator chose to leave it as-is for this story.
+- **AC1 (install):** `pyproject.toml` confirmed unchanged (entry point `dev-helper-mcp = dev_helper_mcp.cli:main`, `uv_build`, `requires-python>=3.14`, `mcp>=1.28,<2` + `aiosqlite>=0.22.1`, `slow` marker). The `uv build` / `uv tool install` / `python -m dev_helper_mcp` path is documented in the README as a manual/opt-in step (not a default-suite test — heavy + environment-mutating).
+- **AC3 (CI-readiness):** confirmed as a property of the suite (tmp/`:memory:` DB + autouse `XDG_STATE_HOME` redirect + `tmp_git_repo`; no absolute-path/`$HOME`/interactive deps). No `.github/workflows` added (v1 = no CI). Documented in the README.
+- **AC4 (logging):** audit found the logging contract largely already satisfied (stderr, `DEV_HELPER_LOG` level, `getLogger(__name__)` per module; `repo_unavailable`/total-failure log at WARNING with code only; `orphan_link` visible via `/state`+dashboard). **One real gap closed:** a typed `DevHelperError` tool failure logged nothing server-side. Added a minimal `logger.info("<tool> failed: %s", exc.code)` to each of the 5 handler typed-error branches — **`error.code` only, never the description body**. No orphan-link log added (already diagnosable; per-tick logging would be noisy — kept minimal).
+- **Scope held:** the only `src/` change is the 5-line diagnostic log addition in `tools/handlers.py`. Everything else is README + a new test.
+
 ### File List
+
+- `src/dev_helper_mcp/tools/handlers.py` — MODIFIED: added a minimal `logger.info("<tool> failed: %s", exc.code)` diagnostic line on each of the 5 handlers' typed-`DevHelperError` branches (code only, no body — NFR-7).
+- `README.md` — MODIFIED: replaced the stale 1.1-skeleton copy with the real v1 description; added "Install" (`uv tool install`/pipx, `--port`, `stop`, `python -m`), "Logging" (stderr, `DEV_HELPER_LOG`, code-not-body), "Quality gate (the real split)" (hook = ruff; tests = manual), and "CI-readiness" sections.
+- `tests/test_logging.py` — NEW: level-from-env (default INFO / DEBUG raises / unknown→INFO) + stderr-not-stdout; failed-tool path logs `error.code` at INFO but never the description body (via `caplog`).
+
+## Review Findings
+
+_Code review 2026-06-29 (adversarial 3-layer: Blind Hunter + Edge Case Hunter + Acceptance Auditor). Outcome: **0 decision-needed, 0 patch, 1 defer, 6 dismissed.** All 4 ACs met; Decision A honored; no scope-creep._
+
+- [x] [Review][Defer] `logger.exception` fallback branch not proven body-safe under NFR-7 [src/dev_helper_mcp/tools/handlers.py:67,84,107,126,138] — deferred, pre-existing (the `except Exception` branch is unchanged by 3.3; standard tracebacks don't print local values, so the practical leak risk is negligible). Recorded in `deferred-work.md`.
+
+**Dismissed (6):**
+- _(false positive, HIGH)_ "`cli.py:96 except OSError, ValueError:` is a syntax error breaking test collection" — **verified false:** valid PEP 758 syntax under the project interpreter (uv → Python 3.14.2; `requires-python>=3.14`); the full suite incl. all 5 `test_logging.py` tests passed this session. The reviewer's `ast.parse` ran under system Python 3.10. Also outside 3.3's changeset (a pre-existing 3.1/3.2 edit). This is the "2.4c dismissed syntax finding" the project-context warns about.
+- "`logger.info` is the wrong altitude / log spam" — INFO is intended (AC4 wants default-level diagnosis); verified none of the 5 handlers are on the `/state` poll path (it reads `cache.current` directly).
+- "redaction test only covers the `update_task` path" — spec asks for "a representative failed-tool path"; all 5 sites are structurally identical `exc.code`-only logging.
+- "caplog could be silenced by root-logger mutation → vacuous test" — refuted by Edge Case Hunter: the `try/finally` restores root handlers/level and the `LogCaptureHandler` intact.
+- "redundant `levelno >= INFO` filter" — harmless.
+- "test doesn't assert `data is None`" — non-material.
 
 ## Change Log
 
 | Date | Change |
 | --- | --- |
+| 2026-06-29 | Code review (adversarial 3-layer). 0 decision-needed, 0 patch, 1 defer (pre-existing `logger.exception` NFR-7 hardening → `deferred-work.md`), 6 dismissed (incl. a HIGH false-positive PEP 758 "syntax error" — valid under Python 3.14, suite green). All 4 ACs met, Decision A honored, no scope-creep. Status → done. |
+| 2026-06-29 | Story 3.3 implemented (→ review). **Decision A resolved (operator sign-off): hook stays ruff-only; tests manual** — AC2 satisfied by the full manual gate green over the complete Epics 1–3 suite (ruff + `pytest -m "not slow"` 314 + `node --test` 53 + `pytest -m slow` 10), NOT by re-arming pytest in the hook. Confirmed `pyproject.toml` install/build/pins unchanged (AC1) and CI-readiness as a suite property (AC3). Logging audit (AC4): closed one gap — typed-error tool failures now log `error.code` (never the description body) via a minimal `logger.info` per handler; added `tests/test_logging.py`. Rewrote the stale 1.1-skeleton README with Install / Logging / Quality-gate-split / CI-readiness sections. No schema/git/tool-surface change. v1 closer — `epic-3` can move toward done + retrospective. |
 | 2026-06-26 | Story 3.3 drafted (ready-for-dev): daily-use install + quality-gate confirmation + logging audit (the v1 closer). Confirms `uv tool install` console entry (`dev-helper-mcp`, already wired in 1.1's pyproject) runs from anywhere; confirms the gate scales to the full Epics 1–3 suite; confirms CI-readiness (suite has no local-path/HOME/interactive deps — no CI file needed in v1); audits logging (stderr, `DEV_HELPER_LOG` default INFO, diagnostic but never full annotation bodies at INFO) + adds `tests/test_logging.py`. **CRITICAL reconciliation (Decision A):** the pre-commit hook is ruff-only (operator decision 2026-06-25); tests are manual — AC2 means "the full gate stays green at full scope", NOT "re-arm pytest in the hook"; **operator sign-off required before touching `.githooks/pre-commit`.** Mostly confirmation + README/docs + minimal logging; no feature/schema/tool change. Hard prerequisite: 3.1 + 3.2 (so the full suite exists). |
