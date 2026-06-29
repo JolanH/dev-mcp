@@ -56,6 +56,67 @@ running one via the lockfile (`InstanceConflict`); a stale lock left by a crash
 is reclaimed automatically on the next start, or cleared with
 `dev-helper-mcp stop` / `--release-lock`.
 
+## Use it from Claude Code
+
+Once the server is running, register it with Claude Code as a Streamable-HTTP
+MCP server. Pin a fixed port so the URL is stable (the default scan picks the
+first free port in `8765`→`8775`, which can move between runs):
+
+```sh
+dev-helper-mcp --port 8765                                  # terminal 1: start, pinned port
+claude mcp add --transport http --scope user \
+  dev-helper http://127.0.0.1:8765/mcp                      # register once (all projects)
+```
+
+`--scope user` makes it available in every project (it matches the server's
+machine-global nature). Verify and inspect:
+
+```sh
+claude mcp list            # from a shell — shows dev-helper as connected
+/mcp                       # inside a Claude Code session — live status + tool list
+```
+
+The five tools then appear in-session as `mcp__dev-helper__create_task`,
+`…_list_worktrees`, `…_remove_worktree`, `…_update_task`, `…_list_tasks`. You
+drive them in **plain language** — Claude picks the tool and fills the
+arguments. Small examples:
+
+| You say | Tool Claude calls | Arguments |
+| --- | --- | --- |
+| "Start a task `add-oauth` to add OAuth across the api and web repos." | `create_task` | `task_name="add-oauth"`, `description="add OAuth"`, `repos=["/path/api", "/path/web"]` |
+| "Branch it off the `release` branch instead of HEAD." | `create_task` | `… base_ref="release"` |
+| "What worktrees exist for `add-oauth`?" | `list_worktrees` | `task_id="add-oauth"` |
+| "Show every task that's awaiting review." | `list_tasks` | `status="review"` |
+| "Mark `add-oauth` as ready for review." | `update_task` | `task_id="add-oauth"`, `status="review"` |
+| "Clean up the `add-oauth` worktree in the api repo and delete its branch." | `remove_worktree` | `task_id="add-oauth"`, `repo="/path/api"`, `delete_branch=true` |
+
+What the tools do:
+
+- **`create_task`** — create a task across one or more repos. Each repo gets an
+  isolated worktree at `<repo>.worktrees/<task>/` on a new `agent/<task>` branch.
+  All-or-nothing across repos. `base_ref` is optional (defaults to the repo's
+  current HEAD).
+- **`list_worktrees`** — live-derived from `git worktree list` (never a cache);
+  optional `repo` / `task_id` filters. Each entry flags `orphaned` if its branch
+  is gone from git.
+- **`update_task`** — self-report progress. `status` is one of `running`,
+  `blocked` (awaiting input), `review` (awaiting review), `done` (terminal). Any
+  active state moves to any of the four; `done` is terminal — a done task can't be
+  re-activated (start a fresh `create_task` of the same name to reuse the slug).
+- **`list_tasks`** — task records + their per-repo worktree links; optional
+  `status` / `repo` filters.
+- **`remove_worktree`** — guarded removal of one task's worktree in one repo
+  (other repos untouched). `delete_branch` also drops the `agent/<task>` branch;
+  `force` overrides the dirty/locked-worktree guard and `force_unmerged_branch`
+  the unmerged-branch guard. Removing a task's last worktree closes the task.
+
+Every tool returns the uniform `{ok, data, error}` envelope — on failure,
+`error.code` is a stable token (e.g. `BranchExists`, `ActiveTaskConflict`,
+`TaskNotFound`, `DirtyWorktree`) Claude can branch on.
+
+Open the dashboard URL printed at startup in a browser to watch tasks and
+worktrees update live while you work.
+
 ## Security
 
 - Binds loopback only — never `0.0.0.0`.
